@@ -45,6 +45,22 @@ impl App {
             self.horiz_offset = 0;
         }
     }
+
+    fn move_column(&mut self, delta: isize) {
+        if self.columns.is_empty() {
+            return;
+        }
+        let Some(idx) = self.column_select_state.selected() else {
+            return;
+        };
+        let len = self.columns.len();
+        let new_idx = (idx as isize + delta).clamp(0, (len as isize) - 1) as usize;
+        if new_idx == idx {
+            return;
+        }
+        self.columns.swap(idx, new_idx);
+        self.column_select_state.select(Some(new_idx));
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -524,6 +540,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                                         col.enabled = !col.enabled;
                                     }
                                 }
+                            }
+                            KeyCode::Char('J') => {
+                                app.move_column(1);
+                            }
+                            KeyCode::Char('K') => {
+                                app.move_column(-1);
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
                                 let len = app.columns.len();
@@ -1102,7 +1124,9 @@ fn render_column_selector(f: &mut Frame, area: Rect, app: &mut App) {
 fn status_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     if matches!(app.input_mode, InputMode::ColumnSelect) {
-        lines.push(Line::from("Columns: use j/k or arrows to move, space/enter to toggle, Esc to close"));
+        lines.push(Line::from(
+            "Columns: j/k or arrows to move cursor, space/enter to toggle, J/K to move column, Esc to close",
+        ));
         return lines;
     }
     if matches!(app.input_mode, InputMode::FilterInput) {
