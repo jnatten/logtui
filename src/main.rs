@@ -323,6 +323,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
 
 fn ui(f: &mut Frame, app: &mut App) {
     let area = f.size();
+    // Clear the full frame to avoid stray output from other streams (e.g., piped command stderr).
+    f.render_widget(Clear, area);
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
