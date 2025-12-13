@@ -20,9 +20,6 @@ logtui --file article-api.log
 
 # Pipe logs from stdin
 kubectl logs mypod | logtui
-
-# Use regex filter at runtime
-/ERROR|CRITICAL<Enter>
 ```
 
 ## ⌨️ Keys (essentials)
@@ -63,15 +60,14 @@ kubectl logs mypod | logtui
 - **Dynamic columns**: New fields discovered in logs (top-level and `data.*`) appear in the selector; defaults are `timestamp`, `level`, `message` (with `message` at the end).
 - **Filtering**: Applies to timestamp, level, message, and full JSON string. Invalid regex leaves the previous filter active and shows an error.
 - **Nested fields**: If `timestamp/level/message` are under `data.*`, they’re used automatically.
-- **Piped stderr**: If your producer writes to stderr (e.g., `stern`), it may scribble over the TUI. Use `2>/dev/null` or `2>&1`, or hit `Ctrl+L` to refresh.
 
 ## 🛠️ Build & run
 
 ```bash
 cargo check
-cargo run -- --file article-api.log
+cargo run -- --file logfile.txt
 # or
-cat article-api.log | cargo run
+cat logfile.txt | cargo run
 ```
 
 ## 🧭 Tips
