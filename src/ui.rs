@@ -504,6 +504,16 @@ fn all_shortcuts() -> Vec<Shortcut> {
             description: "Force redraw",
         },
         Shortcut {
+            context: "Global",
+            keys: "Ctrl+N",
+            description: "Next log (any pane)",
+        },
+        Shortcut {
+            context: "Global",
+            keys: "Ctrl+P",
+            description: "Previous log (any pane)",
+        },
+        Shortcut {
             context: "List",
             keys: "j/k, Up/Down, h/l",
             description: "Move selection",

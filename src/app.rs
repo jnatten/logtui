@@ -415,6 +415,19 @@ pub fn run_app<B: Backend>(
                     if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
                         break;
                     }
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        match key.code {
+                            KeyCode::Char('n') => {
+                                app.next();
+                                continue;
+                            }
+                            KeyCode::Char('p') => {
+                                app.previous();
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
                     if matches!(app.input_mode, InputMode::FilterInput) {
                         match key.code {
                             KeyCode::Esc => {
