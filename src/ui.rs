@@ -6,7 +6,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    app::{App, ColumnDef, FieldEntry, FieldViewState, Focus, InputMode},
+    app::{App, ColumnDef, FieldEntry, FieldViewState, FieldZoom, Focus, InputMode},
     model::LogEntry,
 };
 
@@ -148,10 +148,15 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
         return;
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(area);
+    let chunks = match app.field_zoom {
+        Some(FieldZoom::Fields) => vec![area, Rect::new(0, 0, 0, 0)],
+        Some(FieldZoom::Detail) => vec![Rect::new(0, 0, 0, 0), area],
+        None => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(area)
+            .to_vec(),
+    };
 
     let items: Vec<ListItem> = field_view
         .filtered_indices
@@ -172,30 +177,36 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
         .selected()
         .and_then(|i| field_view.filtered_indices.get(i))
         .and_then(|&idx| field_view.fields.get(idx));
-    let detail_text = match selected {
-        Some(entry) => field_value_text(entry),
-        None => Text::from("Select a field"),
-    };
+    if chunks[1].width > 0 && chunks[1].height > 0 {
+        let detail_text = match selected {
+            Some(entry) => field_value_text(entry),
+            None => Text::from("Select a field"),
+        };
 
-    let inner_width = chunks[1].width.saturating_sub(2) as usize;
-    app.last_field_detail_height = chunks[1].height.saturating_sub(2) as usize;
-    app.field_detail_total_lines = wrapped_height(&detail_text, inner_width);
-    let max_offset = app
-        .field_detail_total_lines
-        .saturating_sub(app.last_field_detail_height.max(1));
-    if app.field_detail_scroll as usize > max_offset {
-        app.field_detail_scroll = max_offset as u16;
+        let inner_width = chunks[1].width.saturating_sub(2) as usize;
+        app.last_field_detail_height = chunks[1].height.saturating_sub(2) as usize;
+        app.field_detail_total_lines = wrapped_height(&detail_text, inner_width);
+        let max_offset = app
+            .field_detail_total_lines
+            .saturating_sub(app.last_field_detail_height.max(1));
+        if app.field_detail_scroll as usize > max_offset {
+            app.field_detail_scroll = max_offset as u16;
+        }
+
+        let title = selected
+            .map(|s| format!("Field: {}", s.path))
+            .unwrap_or_else(|| "Field".to_string());
+        let detail_block = Block::default().title(title).borders(Borders::ALL);
+        let detail = Paragraph::new(detail_text)
+            .block(detail_block)
+            .wrap(Wrap { trim: false })
+            .scroll((app.field_detail_scroll, 0));
+        f.render_widget(detail, chunks[1]);
+    } else {
+        app.last_field_detail_height = 0;
+        app.field_detail_total_lines = 0;
+        app.field_detail_scroll = 0;
     }
-
-    let title = selected
-        .map(|s| format!("Field: {}", s.path))
-        .unwrap_or_else(|| "Field".to_string());
-    let detail_block = Block::default().title(title).borders(Borders::ALL);
-    let detail = Paragraph::new(detail_text)
-        .block(detail_block)
-        .wrap(Wrap { trim: false })
-        .scroll((app.field_detail_scroll, 0));
-    f.render_widget(detail, chunks[1]);
 }
 
 fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
@@ -598,6 +609,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Global",
+            keys: "Ctrl+Z",
+            description: "Zoom focused pane (list/detail/field viewer)",
+        },
+        Shortcut {
+            context: "Global",
             keys: "Ctrl+N",
             description: "Next log (any pane)",
         },
@@ -628,7 +644,7 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "List",
-            keys: "z",
+            keys: "z or Ctrl+Z",
             description: "Toggle zoom (list)",
         },
         Shortcut {
@@ -653,7 +669,7 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Detail",
-            keys: "z",
+            keys: "z or Ctrl+Z",
             description: "Toggle zoom (details)",
         },
         Shortcut {

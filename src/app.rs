@@ -72,6 +72,7 @@ pub struct App {
     pub field_detail_scroll: u16,
     pub field_detail_total_lines: usize,
     pub last_field_detail_height: usize,
+    pub field_zoom: Option<FieldZoom>,
 }
 
 impl App {
@@ -107,6 +108,7 @@ impl App {
             field_detail_scroll: 0,
             field_detail_total_lines: 0,
             last_field_detail_height: 0,
+            field_zoom: None,
         }
     }
 
@@ -291,6 +293,7 @@ impl App {
         self.field_detail_scroll = 0;
         self.field_detail_total_lines = 0;
         self.last_field_detail_height = 0;
+        self.field_zoom = None;
         self.input_mode = InputMode::FieldView;
     }
 
@@ -299,6 +302,7 @@ impl App {
         self.field_detail_scroll = 0;
         self.field_detail_total_lines = 0;
         self.last_field_detail_height = 0;
+        self.field_zoom = None;
         self.input_mode = InputMode::Normal;
     }
 
@@ -467,6 +471,12 @@ impl FieldViewState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldZoom {
+    Fields,
+    Detail,
+}
+
 fn collect_fields(value: &Value) -> Vec<FieldEntry> {
     fn walk(value: &Value, path: String, out: &mut Vec<FieldEntry>) {
         let display_path = if path.is_empty() {
@@ -508,6 +518,14 @@ fn collect_fields(value: &Value) -> Vec<FieldEntry> {
     out
 }
 
+fn cycle_field_zoom(app: &mut App) {
+    app.field_zoom = match app.field_zoom {
+        None => Some(FieldZoom::Detail),
+        Some(FieldZoom::Detail) => Some(FieldZoom::Fields),
+        Some(FieldZoom::Fields) => None,
+    };
+}
+
 pub fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -545,8 +563,30 @@ pub fn run_app<B: Backend>(
                                 app.enter_field_view();
                                 continue;
                             }
+                            KeyCode::Char('z') => {
+                                if matches!(app.input_mode, InputMode::FieldView) {
+                                    cycle_field_zoom(app);
+                                } else {
+                                    app.zoom = match app.zoom {
+                                        Some(Focus::List) => None,
+                                        _ => Some(app.focus),
+                                    };
+                                }
+                                continue;
+                            }
                             _ => {}
                         }
+                    }
+                    if key.code == KeyCode::Char('z')
+                        && !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !matches!(app.input_mode, InputMode::FieldView)
+                    {
+                        app.zoom = match app.zoom {
+                            Some(Focus::List) if matches!(app.focus, Focus::List) => None,
+                            Some(Focus::Detail) if matches!(app.focus, Focus::Detail) => None,
+                            _ => Some(app.focus),
+                        };
+                        continue;
                     }
                     if matches!(app.input_mode, InputMode::FieldView) {
                         if key.code == KeyCode::Esc
@@ -557,7 +597,6 @@ pub fn run_app<B: Backend>(
                         }
                         if let Some(fv) = app.field_view.as_mut() {
                             match key.code {
-                                KeyCode::Char('q') => app.exit_field_view(),
                                 KeyCode::Backspace => {
                                     if !fv.filter.is_empty() {
                                         fv.filter.pop();
@@ -583,7 +622,7 @@ pub fn run_app<B: Backend>(
                                         app.field_detail_scroll = 0;
                                     }
                                 }
-                                KeyCode::Down | KeyCode::Char('j') => {
+                                KeyCode::Down => {
                                     if fv.filtered_indices.is_empty() {
                                         continue;
                                     }
@@ -596,7 +635,7 @@ pub fn run_app<B: Backend>(
                                     fv.list_state.select(next);
                                     app.field_detail_scroll = 0;
                                 }
-                                KeyCode::Up | KeyCode::Char('k') => {
+                                KeyCode::Up => {
                                     if fv.filtered_indices.is_empty() {
                                         continue;
                                     }
@@ -607,17 +646,6 @@ pub fn run_app<B: Backend>(
                                         .or(Some(0));
                                     fv.list_state.select(prev);
                                     app.field_detail_scroll = 0;
-                                }
-                                KeyCode::Char('g') => {
-                                    fv.list_state.select(Some(0));
-                                    app.field_detail_scroll = 0;
-                                }
-                                KeyCode::Char('G') => {
-                                    if !fv.filtered_indices.is_empty() {
-                                        fv.list_state
-                                            .select(Some(fv.filtered_indices.len().saturating_sub(1)));
-                                        app.field_detail_scroll = 0;
-                                    }
                                 }
                                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                     let half = (app.last_field_detail_height.max(1) / 2).max(1);
