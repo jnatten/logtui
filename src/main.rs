@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, IsTerminal};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
@@ -186,14 +186,17 @@ enum Focus {
 enum InputSource {
     Stdin,
     File(PathBuf),
+    StdinPipe(File),
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let input_source = if let Some(path) = args.file {
+    let input_source = if let Some(path) = args.file.clone() {
         InputSource::File(path)
-    } else {
+    } else if io::stdin().is_terminal() {
         InputSource::Stdin
+    } else {
+        InputSource::StdinPipe(File::open("/dev/stdin").context("opening /dev/stdin")?)
     };
 
     let (tx, rx) = mpsc::channel();
@@ -531,6 +534,7 @@ fn spawn_reader(input: InputSource, tx: mpsc::Sender<LogEntry>) {
                     return;
                 }
             },
+            InputSource::StdinPipe(file) => Box::new(BufReader::new(file)),
         };
 
         for line in reader.lines() {
