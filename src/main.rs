@@ -20,6 +20,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
+use regex::Regex;
 use serde_json::{json, Value};
 use unicode_width::UnicodeWidthStr;
 
@@ -45,6 +46,7 @@ struct LogEntry {
 
 struct App {
     entries: Vec<LogEntry>,
+    filtered_indices: Vec<usize>,
     list_state: ListState,
     max_entries: usize,
     last_list_height: usize,
@@ -54,6 +56,11 @@ struct App {
     focus: Focus,
     show_help: bool,
     zoom: Option<Focus>,
+    filter_query: String,
+    filter_regex: Option<Regex>,
+    filter_error: Option<String>,
+    input_mode: InputMode,
+    filter_buffer: String,
 }
 
 impl App {
@@ -62,6 +69,7 @@ impl App {
         list_state.select(None);
         Self {
             entries: Vec::new(),
+            filtered_indices: Vec::new(),
             list_state,
             max_entries,
             last_list_height: 0,
@@ -71,6 +79,11 @@ impl App {
             focus: Focus::List,
             show_help: false,
             zoom: None,
+            filter_query: String::new(),
+            filter_regex: None,
+            filter_error: None,
+            input_mode: InputMode::Normal,
+            filter_buffer: String::new(),
         }
     }
 
@@ -86,23 +99,21 @@ impl App {
             }
         }
         self.entries.push(entry);
-        let last = self.entries.len().saturating_sub(1);
-        self.list_state.select(Some(last));
-        self.detail_scroll = 0;
+        self.rebuild_filtered(Some(SelectStrategy::Last));
     }
 
     fn next(&mut self) {
-        if self.entries.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
         let i = self.list_state.selected().unwrap_or(0);
-        let next = (i + 1).min(self.entries.len() - 1);
+        let next = (i + 1).min(self.filtered_indices.len() - 1);
         self.list_state.select(Some(next));
         self.detail_scroll = 0;
     }
 
     fn previous(&mut self) {
-        if self.entries.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
         let i = self.list_state.selected().unwrap_or(0);
@@ -112,18 +123,18 @@ impl App {
     }
 
     fn page_down(&mut self) {
-        if self.entries.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
         let half = (self.last_list_height.max(1) / 2).max(1);
         let i = self.list_state.selected().unwrap_or(0);
-        let next = (i + half).min(self.entries.len() - 1);
+        let next = (i + half).min(self.filtered_indices.len() - 1);
         self.list_state.select(Some(next));
         self.detail_scroll = 0;
     }
 
     fn page_up(&mut self) {
-        if self.entries.is_empty() {
+        if self.filtered_indices.is_empty() {
             return;
         }
         let half = (self.last_list_height.max(1) / 2).max(1);
@@ -134,16 +145,16 @@ impl App {
     }
 
     fn select_last(&mut self) {
-        if self.entries.is_empty() {
+        if self.filtered_indices.is_empty() {
             self.list_state.select(None);
         } else {
-            self.list_state.select(Some(self.entries.len() - 1));
+            self.list_state.select(Some(self.filtered_indices.len() - 1));
         }
         self.detail_scroll = 0;
     }
 
     fn select_first(&mut self) {
-        if self.entries.is_empty() {
+        if self.filtered_indices.is_empty() {
             self.list_state.select(None);
         } else {
             self.list_state.select(Some(0));
@@ -152,10 +163,9 @@ impl App {
     }
 
     fn current_entry(&self) -> Option<LogEntry> {
-        self.list_state
-            .selected()
-            .and_then(|i| self.entries.get(i))
-            .cloned()
+        let idx = self.list_state.selected()?;
+        let entry_idx = *self.filtered_indices.get(idx)?;
+        self.entries.get(entry_idx).cloned()
     }
 
     fn detail_down(&mut self, lines: usize) {
@@ -188,12 +198,107 @@ impl App {
             .saturating_sub(self.last_detail_height.max(1));
         self.detail_scroll = max_offset as u16;
     }
+
+    fn rebuild_filtered(&mut self, strategy: Option<SelectStrategy>) {
+        let prev_selected_entry = self
+            .list_state
+            .selected()
+            .and_then(|idx| self.filtered_indices.get(idx))
+            .copied();
+
+        let mut filtered = Vec::with_capacity(self.entries.len());
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if self.matches_filter(entry) {
+                filtered.push(idx);
+            }
+        }
+
+        self.filtered_indices = filtered;
+
+        if self.filtered_indices.is_empty() {
+            self.list_state.select(None);
+            self.detail_scroll = 0;
+            return;
+        }
+
+        match strategy.unwrap_or(SelectStrategy::PreserveOrFirst) {
+            SelectStrategy::Last => {
+                self.list_state
+                    .select(Some(self.filtered_indices.len().saturating_sub(1)));
+                self.detail_scroll = 0;
+            }
+            SelectStrategy::PreserveOrFirst => {
+                if let Some(prev_entry_idx) = prev_selected_entry {
+                    if let Some(new_pos) = self
+                        .filtered_indices
+                        .iter()
+                        .position(|&idx| idx == prev_entry_idx)
+                    {
+                        self.list_state.select(Some(new_pos));
+                        self.detail_scroll = 0;
+                        return;
+                    }
+                }
+                self.list_state.select(Some(0));
+                self.detail_scroll = 0;
+            }
+        }
+    }
+
+    fn matches_filter(&self, entry: &LogEntry) -> bool {
+        if let Some(re) = &self.filter_regex {
+            let hay = format!(
+                "{} {} {} {}",
+                entry.timestamp,
+                entry.level,
+                entry.message,
+                entry.raw
+            );
+            re.is_match(&hay)
+        } else {
+            true
+        }
+    }
+
+    fn apply_filter(&mut self, pattern: &str) {
+        if pattern.is_empty() {
+            self.filter_query.clear();
+            self.filter_regex = None;
+            self.filter_error = None;
+            self.rebuild_filtered(Some(SelectStrategy::PreserveOrFirst));
+            return;
+        }
+
+        match Regex::new(pattern) {
+            Ok(re) => {
+                self.filter_query = pattern.to_string();
+                self.filter_regex = Some(re);
+                self.filter_error = None;
+                self.rebuild_filtered(Some(SelectStrategy::PreserveOrFirst));
+            }
+            Err(err) => {
+                self.filter_error = Some(err.to_string());
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     List,
     Detail,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputMode {
+    Normal,
+    FilterInput,
+}
+
+#[derive(Clone, Copy)]
+enum SelectStrategy {
+    PreserveOrFirst,
+    Last,
 }
 
 enum InputSource {
@@ -252,6 +357,31 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                     if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
                         break;
                     }
+                    if matches!(app.input_mode, InputMode::FilterInput) {
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.input_mode = InputMode::Normal;
+                                app.filter_buffer.clear();
+                                app.filter_error = None;
+                            }
+                            KeyCode::Enter => {
+                                let pattern = app.filter_buffer.clone();
+                                app.input_mode = InputMode::Normal;
+                                app.apply_filter(&pattern);
+                            }
+                            KeyCode::Backspace => {
+                                app.filter_buffer.pop();
+                            }
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.filter_buffer.clear();
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.filter_buffer.push(c);
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
                     if key.code == KeyCode::Char('?') {
                         app.show_help = !app.show_help;
                         continue;
@@ -272,6 +402,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             KeyCode::Char('k') | KeyCode::Up => app.previous(),
                             KeyCode::Char('h') => app.previous(),
                             KeyCode::Char('l') => app.next(),
+                            KeyCode::Char('/') => {
+                                app.input_mode = InputMode::FilterInput;
+                                app.filter_buffer = app.filter_query.clone();
+                                app.filter_error = None;
+                            }
                             KeyCode::Char('z') => {
                                 app.zoom = match app.zoom {
                                     Some(Focus::List) => None,
@@ -302,6 +437,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             }
                             KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') => {
                                 app.detail_up(1)
+                            }
+                            KeyCode::Char('/') => {
+                                app.input_mode = InputMode::FilterInput;
+                                app.filter_buffer = app.filter_query.clone();
+                                app.filter_error = None;
                             }
                             KeyCode::Char('z') => {
                                 app.zoom = match app.zoom {
@@ -341,9 +481,35 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
-    let area = f.size();
+    let full_area = f.size();
     // Clear the full frame to avoid stray output from other streams (e.g., piped command stderr).
-    f.render_widget(Clear, area);
+    f.render_widget(Clear, full_area);
+
+    let show_status = matches!(app.input_mode, InputMode::FilterInput)
+        || app.filter_error.is_some()
+        || !app.filter_query.is_empty();
+
+    let status_lines = if show_status {
+        Some(status_lines(app))
+    } else {
+        None
+    };
+
+    let vertical = match &status_lines {
+        Some(lines) => {
+            let needed_height = (lines.len() as u16).saturating_add(2).max(3);
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(3), Constraint::Length(needed_height)])
+                .split(full_area)
+        }
+        None => Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3)])
+            .split(full_area),
+    };
+
+    let area = vertical[0];
     let chunks = match app.zoom {
         Some(Focus::List) => vec![area, Rect::new(0, 0, 0, 0)],
         Some(Focus::Detail) => vec![Rect::new(0, 0, 0, 0), area],
@@ -358,8 +524,9 @@ fn ui(f: &mut Frame, app: &mut App) {
     app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
 
     let items: Vec<ListItem> = app
-        .entries
+        .filtered_indices
         .iter()
+        .filter_map(|&idx| app.entries.get(idx))
         .map(|entry| {
             let content = format!(
                 "{}  {:<5} {}",
@@ -371,8 +538,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
+    let list_title = if app.filter_query.is_empty() {
+        "Logs".to_string()
+    } else {
+        format!("Logs [/{}]", app.filter_query)
+    };
+
     let list_block = Block::default()
-        .title("Logs")
+        .title(list_title)
         .borders(Borders::ALL)
         .border_style(match app.focus {
             Focus::List => Style::default().fg(Color::Cyan),
@@ -390,7 +563,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         let selected_entry = app
             .list_state
             .selected()
-            .and_then(|i| app.entries.get(i))
+            .and_then(|i| app.filtered_indices.get(i))
+            .and_then(|&idx| app.entries.get(idx))
             .cloned();
         let detail_text = selected_details(selected_entry);
         let inner_width = chunks[1].width.saturating_sub(2) as usize;
@@ -418,7 +592,9 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     if app.show_help {
-        render_help(f, area);
+        render_help(f, full_area);
+    } else if let Some(lines) = status_lines {
+        render_status(f, vertical[vertical.len() - 1], lines);
     }
 }
 
@@ -521,6 +697,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             description: "Toggle help",
         },
         Shortcut {
+            context: "Global",
+            keys: "/",
+            description: "Filter logs (regex)",
+        },
+        Shortcut {
             context: "List",
             keys: "j/k, Up/Down, h/l",
             description: "Move selection",
@@ -620,6 +801,36 @@ fn render_help(f: &mut Frame, area: Rect) {
     let help = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
     f.render_widget(Clear, popup);
     f.render_widget(help, popup);
+}
+
+fn status_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = Vec::new();
+    if matches!(app.input_mode, InputMode::FilterInput) {
+        lines.push(Line::from(format!("Filter (regex): {}_", app.filter_buffer)));
+    } else if !app.filter_query.is_empty() {
+        lines.push(Line::from(format!(
+            "Filter: /{}/ ({})",
+            app.filter_query,
+            app.filtered_indices.len()
+        )));
+    } else {
+        lines.push(Line::from("Filter: (none)"));
+    }
+
+    if let Some(err) = &app.filter_error {
+        lines.push(Line::styled(
+            format!("Filter error: {err}"),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    lines
+}
+
+fn render_status(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+    let block = Block::default().borders(Borders::ALL);
+    let status = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: true });
+    f.render_widget(Clear, area);
+    f.render_widget(status, area);
 }
 
 fn indent_span(indent: usize) -> Span<'static> {
