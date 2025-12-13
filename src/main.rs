@@ -1,5 +1,7 @@
-use std::fs::File;
+use std::env;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, IsTerminal};
+use std::process::Command;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
@@ -145,6 +147,13 @@ impl App {
         self.detail_scroll = 0;
     }
 
+    fn current_entry(&self) -> Option<LogEntry> {
+        self.list_state
+            .selected()
+            .and_then(|i| self.entries.get(i))
+            .cloned()
+    }
+
     fn detail_down(&mut self, lines: usize) {
         if self.detail_total_lines == 0 {
             return;
@@ -265,6 +274,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             }
                             KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') => {
                                 app.detail_up(1)
+                            }
+                            KeyCode::Char('e') => {
+                                if let Some(entry) = app.current_entry() {
+                                    open_entry_in_editor(terminal, &entry)?;
+                                }
                             }
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 let half = (app.last_detail_height.max(1) / 2).max(1);
@@ -392,6 +406,47 @@ fn level_style(level: &str) -> Style {
 
 fn level_span(level: &str) -> Span<'static> {
     Span::styled(level.to_ascii_uppercase(), level_style(level))
+}
+
+fn open_entry_in_editor<B: Backend>(terminal: &mut Terminal<B>, entry: &LogEntry) -> Result<()> {
+    // Leave the TUI cleanly.
+    disable_raw_mode().ok();
+    let mut stdout = io::stdout();
+    execute!(stdout, LeaveAlternateScreen).ok();
+    terminal.show_cursor().ok();
+
+    let result = (|| -> Result<()> {
+        let mut path = env::temp_dir();
+        let sanitized_ts: String = entry
+            .timestamp
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        path.push(format!("logtui-{}.json", sanitized_ts));
+
+        let contents = serde_json::to_string_pretty(&entry.raw)?;
+        fs::write(&path, contents)?;
+
+        let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let status = Command::new(editor).arg(&path).status();
+        match status {
+            Ok(s) if !s.success() => {
+                eprintln!("Editor exited with status: {s}");
+            }
+            Err(err) => {
+                eprintln!("Failed to launch editor: {err}");
+            }
+            _ => {}
+        }
+        Ok(())
+    })();
+
+    // Restore the TUI.
+    execute!(stdout, EnterAlternateScreen).ok();
+    enable_raw_mode().ok();
+    terminal.clear()?;
+
+    result
 }
 
 fn indent_span(indent: usize) -> Span<'static> {
