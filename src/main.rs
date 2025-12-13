@@ -61,6 +61,7 @@ struct App {
     filter_error: Option<String>,
     input_mode: InputMode,
     filter_buffer: String,
+    force_redraw: bool,
 }
 
 impl App {
@@ -84,6 +85,7 @@ impl App {
             filter_error: None,
             input_mode: InputMode::Normal,
             filter_buffer: String::new(),
+            force_redraw: true,
         }
     }
 
@@ -347,9 +349,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
             app.push(entry);
         }
 
-        terminal
-            .draw(|f| ui(f, app))
-            .context("drawing frame")?;
+        if app.force_redraw {
+            terminal.clear().ok();
+            app.force_redraw = false;
+        }
+
+        terminal.draw(|f| ui(f, app)).context("drawing frame")?;
 
         if event::poll(Duration::from_millis(100)).context("polling for events")? {
             match event::read().context("reading event")? {
@@ -398,6 +403,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
 
                     match app.focus {
                         Focus::List => match key.code {
+                            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.force_redraw = true;
+                            }
                             KeyCode::Char('j') | KeyCode::Down => app.next(),
                             KeyCode::Char('k') | KeyCode::Up => app.previous(),
                             KeyCode::Char('h') => app.previous(),
@@ -432,6 +440,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             _ => {}
                         },
                         Focus::Detail => match key.code {
+                            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.force_redraw = true;
+                            }
                             KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('l') => {
                                 app.detail_down(1)
                             }
@@ -700,6 +711,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Global",
             keys: "/",
             description: "Filter logs (regex)",
+        },
+        Shortcut {
+            context: "Global",
+            keys: "Ctrl+L",
+            description: "Force redraw",
         },
         Shortcut {
             context: "List",
