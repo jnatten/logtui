@@ -18,7 +18,7 @@ use crossterm::{
 use ratatui::{
     prelude::*,
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde_json::{json, Value};
 use unicode_width::UnicodeWidthStr;
@@ -52,6 +52,7 @@ struct App {
     detail_scroll: u16,
     detail_total_lines: usize,
     focus: Focus,
+    show_help: bool,
 }
 
 impl App {
@@ -67,6 +68,7 @@ impl App {
             detail_scroll: 0,
             detail_total_lines: 0,
             focus: Focus::List,
+            show_help: false,
         }
     }
 
@@ -248,6 +250,19 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                     if key.code == KeyCode::Char('q') {
                         break;
                     }
+                    if key.code == KeyCode::Char('?') {
+                        app.show_help = !app.show_help;
+                        continue;
+                    }
+
+                    if app.show_help {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('?') => app.show_help = false,
+                            KeyCode::Char('q') => break,
+                            _ => {}
+                        }
+                        continue;
+                    }
 
                     match app.focus {
                         Focus::List => match key.code {
@@ -373,6 +388,10 @@ fn ui(f: &mut Frame, app: &mut App) {
         .wrap(Wrap { trim: false })
         .scroll((app.detail_scroll, 0));
     f.render_widget(detail, chunks[1]);
+
+    if app.show_help {
+        render_help(f, area);
+    }
 }
 
 fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
@@ -447,6 +466,110 @@ fn open_entry_in_editor<B: Backend>(terminal: &mut Terminal<B>, entry: &LogEntry
     terminal.clear()?;
 
     result
+}
+
+#[derive(Clone, Copy)]
+struct Shortcut {
+    context: &'static str,
+    keys: &'static str,
+    description: &'static str,
+}
+
+fn all_shortcuts() -> Vec<Shortcut> {
+    vec![
+        Shortcut {
+            context: "Global",
+            keys: "q",
+            description: "Quit",
+        },
+        Shortcut {
+            context: "Global",
+            keys: "?",
+            description: "Toggle help",
+        },
+        Shortcut {
+            context: "List",
+            keys: "j/k, Up/Down, h/l",
+            description: "Move selection",
+        },
+        Shortcut {
+            context: "List",
+            keys: "Ctrl+d / Ctrl+u",
+            description: "Half-page down/up",
+        },
+        Shortcut {
+            context: "List",
+            keys: "g / G",
+            description: "Jump to top/bottom",
+        },
+        Shortcut {
+            context: "List",
+            keys: "Enter, Tab, Right",
+            description: "Focus details",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "j/k, Up/Down, h/l",
+            description: "Scroll details",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "Ctrl+d / Ctrl+u",
+            description: "Half-page down/up",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "g / G",
+            description: "Jump to top/bottom",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "Tab, Left, Esc",
+            description: "Back to list",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "e",
+            description: "Open entry in $EDITOR",
+        },
+    ]
+}
+
+fn render_help(f: &mut Frame, area: Rect) {
+    let width = (area.width.saturating_sub(10)).min(90).max(50);
+    let height = (area.height.saturating_sub(6)).min(20).max(10);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut entries = all_shortcuts();
+    entries.sort_by(|a, b| a.context.cmp(b.context));
+    let mut current_context: Option<&str> = None;
+    for sc in entries {
+        if current_context != Some(sc.context) {
+            if current_context.is_some() {
+                lines.push(Line::from(""));
+            }
+            current_context = Some(sc.context);
+            lines.push(Line::styled(
+                sc.context,
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:20}", sc.keys),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw(sc.description),
+        ]));
+    }
+
+    let block = Block::default().title("Shortcuts").borders(Borders::ALL);
+    let help = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
+    f.render_widget(Clear, popup);
+    f.render_widget(help, popup);
 }
 
 fn indent_span(indent: usize) -> Span<'static> {
