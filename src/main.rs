@@ -22,7 +22,7 @@ use ratatui::{
 };
 use regex::Regex;
 use serde_json::{json, Value};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Interactive TUI log viewer")]
@@ -47,6 +47,8 @@ struct LogEntry {
 struct App {
     entries: Vec<LogEntry>,
     filtered_indices: Vec<usize>,
+    columns: Vec<ColumnDef>,
+    column_select_state: ListState,
     list_state: ListState,
     max_entries: usize,
     last_list_height: usize,
@@ -68,9 +70,13 @@ impl App {
     fn new(max_entries: usize) -> Self {
         let mut list_state = ListState::default();
         list_state.select(None);
+        let mut column_select_state = ListState::default();
+        column_select_state.select(Some(0));
         Self {
             entries: Vec::new(),
             filtered_indices: Vec::new(),
+            columns: default_columns(),
+            column_select_state,
             list_state,
             max_entries,
             last_list_height: 0,
@@ -100,6 +106,7 @@ impl App {
                 }
             }
         }
+        self.discover_columns(&entry.raw);
         self.entries.push(entry);
         self.rebuild_filtered(Some(SelectStrategy::Last));
     }
@@ -283,6 +290,47 @@ impl App {
             }
         }
     }
+
+    fn discover_columns(&mut self, value: &Value) {
+        let mut to_add: Vec<ColumnDef> = Vec::new();
+
+        if let Some(obj) = value.as_object() {
+            for key in obj.keys() {
+                if is_reserved_column(key) {
+                    continue;
+                }
+                let path = vec![key.clone()];
+                if !self.columns.iter().any(|c| c.path == path) {
+                    to_add.push(ColumnDef::new(key.clone(), path));
+                }
+            }
+        }
+
+        if let Some(data) = value.get("data").and_then(|v| v.as_object()) {
+            for key in data.keys() {
+                if is_reserved_column(key) {
+                    continue;
+                }
+                let path = vec!["data".to_string(), key.clone()];
+                if !self.columns.iter().any(|c| c.path == path) {
+                    to_add.push(ColumnDef::new(format!("data.{key}"), path));
+                }
+            }
+        }
+
+        if !to_add.is_empty() {
+            self.columns.extend(to_add);
+            let len = self.columns.len();
+            if self
+                .column_select_state
+                .selected()
+                .map(|i| i >= len)
+                .unwrap_or(true)
+            {
+                self.column_select_state.select(Some(0));
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,6 +343,7 @@ enum Focus {
 enum InputMode {
     Normal,
     FilterInput,
+    ColumnSelect,
 }
 
 #[derive(Clone, Copy)]
@@ -303,10 +352,51 @@ enum SelectStrategy {
     Last,
 }
 
+#[derive(Clone, Debug)]
+struct ColumnDef {
+    name: String,
+    path: Vec<String>,
+    enabled: bool,
+}
+
+impl ColumnDef {
+    fn new(name: String, path: Vec<String>) -> Self {
+        Self {
+            name,
+            path,
+            enabled: false,
+        }
+    }
+}
+
 enum InputSource {
     Stdin,
     File(PathBuf),
     StdinPipe(File),
+}
+
+fn default_columns() -> Vec<ColumnDef> {
+    vec![
+        ColumnDef {
+            name: "timestamp".into(),
+            path: vec!["timestamp".into()],
+            enabled: true,
+        },
+        ColumnDef {
+            name: "level".into(),
+            path: vec!["level".into()],
+            enabled: true,
+        },
+        ColumnDef {
+            name: "message".into(),
+            path: vec!["message".into()],
+            enabled: true,
+        },
+    ]
+}
+
+fn is_reserved_column(key: &str) -> bool {
+    matches!(key, "timestamp" | "level" | "message" | "instant" | "data")
 }
 
 fn main() -> Result<()> {
@@ -401,6 +491,48 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                         continue;
                     }
 
+                    if matches!(app.input_mode, InputMode::ColumnSelect) {
+                        match key.code {
+                            KeyCode::Char('q') => break,
+                            KeyCode::Esc | KeyCode::Char('c') => {
+                                app.input_mode = InputMode::Normal;
+                            }
+                            KeyCode::Char(' ') | KeyCode::Enter => {
+                                if let Some(idx) = app.column_select_state.selected() {
+                                    if let Some(col) = app.columns.get_mut(idx) {
+                                        col.enabled = !col.enabled;
+                                    }
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                let len = app.columns.len();
+                                let next = app
+                                    .column_select_state
+                                    .selected()
+                                    .map(|i| (i + 1).min(len.saturating_sub(1)))
+                                    .or(Some(0));
+                                app.column_select_state.select(next);
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                let prev = app
+                                    .column_select_state
+                                    .selected()
+                                    .map(|i| i.saturating_sub(1))
+                                    .or(Some(0));
+                                app.column_select_state.select(prev);
+                            }
+                            KeyCode::Char('g') => app.column_select_state.select(Some(0)),
+                            KeyCode::Char('G') => {
+                                if !app.columns.is_empty() {
+                                    app.column_select_state
+                                        .select(Some(app.columns.len().saturating_sub(1)));
+                                }
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     match app.focus {
                         Focus::List => match key.code {
                             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -410,6 +542,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             KeyCode::Char('k') | KeyCode::Up => app.previous(),
                             KeyCode::Char('h') => app.previous(),
                             KeyCode::Char('l') => app.next(),
+                            KeyCode::Char('c') => {
+                                app.input_mode = InputMode::ColumnSelect;
+                                if app.column_select_state.selected().is_none() && !app.columns.is_empty() {
+                                    app.column_select_state.select(Some(0));
+                                }
+                            }
                             KeyCode::Char('/') => {
                                 app.input_mode = InputMode::FilterInput;
                                 app.filter_buffer = app.filter_query.clone();
@@ -442,6 +580,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                         Focus::Detail => match key.code {
                             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.force_redraw = true;
+                            }
+                            KeyCode::Char('c') => {
+                                app.input_mode = InputMode::ColumnSelect;
+                                if app.column_select_state.selected().is_none() && !app.columns.is_empty() {
+                                    app.column_select_state.select(Some(0));
+                                }
                             }
                             KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('l') => {
                                 app.detail_down(1)
@@ -534,17 +678,14 @@ fn ui(f: &mut Frame, app: &mut App) {
     app.last_list_height = chunks[0].height.saturating_sub(2) as usize;
     app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
 
+    let list_width = chunks[0].width.saturating_sub(2) as usize;
+    let enabled_columns: Vec<&ColumnDef> = app.columns.iter().filter(|c| c.enabled).collect();
     let items: Vec<ListItem> = app
         .filtered_indices
         .iter()
         .filter_map(|&idx| app.entries.get(idx))
         .map(|entry| {
-            let content = format!(
-                "{}  {:<5} {}",
-                entry.timestamp,
-                entry.level.to_uppercase(),
-                entry.message
-            );
+            let content = render_row(entry, &enabled_columns, list_width);
             ListItem::new(content).style(level_style(&entry.level))
         })
         .collect();
@@ -607,6 +748,10 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else if let Some(lines) = status_lines {
         render_status(f, vertical[vertical.len() - 1], lines);
     }
+
+    if matches!(app.input_mode, InputMode::ColumnSelect) {
+        render_column_selector(f, full_area, app);
+    }
 }
 
 fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
@@ -640,6 +785,71 @@ fn level_style(level: &str) -> Style {
 
 fn level_span(level: &str) -> Span<'static> {
     Span::styled(level.to_ascii_uppercase(), level_style(level))
+}
+
+fn render_row(entry: &LogEntry, cols: &[&ColumnDef], width: usize) -> String {
+    if cols.is_empty() {
+        return "[no columns selected]".to_string();
+    }
+    let n = cols.len();
+    let separator = " | ";
+    let sep_width = separator.len() * (n.saturating_sub(1));
+    let per = if n == 0 {
+        width
+    } else {
+        width.saturating_sub(sep_width) / n.max(1)
+    }
+    .max(6);
+    let mut parts = Vec::with_capacity(n);
+    for col in cols {
+        let val = extract_field_string(&entry.raw, &col.path).unwrap_or_default();
+        parts.push(truncate_cell(&val, per));
+    }
+    parts.join(separator)
+}
+
+fn truncate_cell(s: &str, width: usize) -> String {
+    if s.width() <= width {
+        s.to_string()
+    } else if width <= 1 {
+        "…".to_string()
+    } else if width <= 4 {
+        let mut out = String::new();
+        for ch in s.chars() {
+            if out.width() + ch.width().unwrap_or(1) >= width {
+                break;
+            }
+            out.push(ch);
+        }
+        out
+    } else {
+        let mut out = String::new();
+        let mut current = 0;
+        for ch in s.chars() {
+            let w = ch.width().unwrap_or(1);
+            if current + w >= width.saturating_sub(1) {
+                break;
+            }
+            out.push(ch);
+            current += w;
+        }
+        out.push('…');
+        out
+    }
+}
+
+fn extract_field_string<'a>(value: &'a Value, path: &[String]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(key)?;
+    }
+    match current {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null => Some("null".into()),
+        other => Some(other.to_string()),
+    }
 }
 
 fn open_entry_in_editor<B: Backend>(terminal: &mut Terminal<B>, entry: &LogEntry) -> Result<()> {
@@ -777,6 +987,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             keys: "e",
             description: "Open entry in $EDITOR",
         },
+        Shortcut {
+            context: "Global",
+            keys: "c",
+            description: "Toggle column selector",
+        },
     ]
 }
 
@@ -819,8 +1034,38 @@ fn render_help(f: &mut Frame, area: Rect) {
     f.render_widget(help, popup);
 }
 
+fn render_column_selector(f: &mut Frame, area: Rect, app: &mut App) {
+    let width = (area.width.saturating_sub(10)).min(90).max(40);
+    let height = (app.columns.len() as u16 + 4).min(area.height.saturating_sub(2)).max(6);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    let items: Vec<ListItem> = app
+        .columns
+        .iter()
+        .map(|c| {
+            let prefix = if c.enabled { "[x]" } else { "[ ]" };
+            let text = format!("{prefix} {}", c.name);
+            ListItem::new(text)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().title("Columns (space to toggle, Esc to close)").borders(Borders::ALL))
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("▸ ");
+
+    f.render_widget(Clear, popup);
+    f.render_stateful_widget(list, popup, &mut app.column_select_state);
+}
+
 fn status_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
+    if matches!(app.input_mode, InputMode::ColumnSelect) {
+        lines.push(Line::from("Columns: use j/k or arrows to move, space/enter to toggle, Esc to close"));
+        return lines;
+    }
     if matches!(app.input_mode, InputMode::FilterInput) {
         lines.push(Line::from(format!("Filter (regex): {}_", app.filter_buffer)));
     } else if !app.filter_query.is_empty() {
