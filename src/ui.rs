@@ -613,6 +613,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Global",
+            keys: "Ctrl+E",
+            description: "Open entry/field in $EDITOR",
+        },
+        Shortcut {
+            context: "Global",
             keys: "Ctrl+N",
             description: "Next log (any pane)",
         },
@@ -648,7 +653,7 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "List",
-            keys: "e",
+            keys: "Ctrl+E",
             description: "Open entry in $EDITOR",
         },
         Shortcut {
@@ -678,8 +683,13 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Detail",
-            keys: "e",
+            keys: "Ctrl+E",
             description: "Open entry in $EDITOR",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "Ctrl+E",
+            description: "Open selected field in $EDITOR",
         },
         Shortcut {
             context: "Global",

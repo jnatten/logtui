@@ -6,7 +6,11 @@ use ratatui::{backend::Backend, Terminal, widgets::ListState};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::{editor::open_entry_in_editor, model::LogEntry, ui};
+use crate::{
+    editor::{open_entry_in_editor, open_value_in_editor},
+    model::LogEntry,
+    ui,
+};
 
 #[derive(Clone, Debug)]
 pub struct ColumnDef {
@@ -572,6 +576,23 @@ pub fn run_app<B: Backend>(
                                 }
                                 continue;
                             }
+                            KeyCode::Char('e') => {
+                                if matches!(app.input_mode, InputMode::FieldView) {
+                                    if let Some(fv) = app.field_view.as_ref() {
+                                        if let Some(sel) = fv
+                                            .list_state
+                                            .selected()
+                                            .and_then(|i| fv.filtered_indices.get(i))
+                                            .and_then(|&idx| fv.fields.get(idx))
+                                        {
+                                            open_value_in_editor(terminal, &sel.path, &sel.value)?;
+                                        }
+                                    }
+                                } else if let Some(entry) = app.current_entry() {
+                                    open_entry_in_editor(terminal, &entry)?;
+                                }
+                                continue;
+                            }
                             _ => {}
                         }
                     }
@@ -797,11 +818,6 @@ pub fn run_app<B: Backend>(
                                     _ => Some(Focus::List),
                                 }
                             }
-                            KeyCode::Char('e') => {
-                                if let Some(entry) = app.current_entry() {
-                                    open_entry_in_editor(terminal, &entry)?;
-                                }
-                            }
                             KeyCode::Char('g') => app.select_first(),
                             KeyCode::Char('G') => app.select_last(),
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -842,11 +858,6 @@ pub fn run_app<B: Backend>(
                                 app.zoom = match app.zoom {
                                     Some(Focus::Detail) => None,
                                     _ => Some(Focus::Detail),
-                                }
-                            }
-                            KeyCode::Char('e') => {
-                                if let Some(entry) = app.current_entry() {
-                                    open_entry_in_editor(terminal, &entry)?;
                                 }
                             }
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
