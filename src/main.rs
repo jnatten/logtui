@@ -36,6 +36,17 @@ struct Args {
     max_entries: usize,
 }
 
+impl App {
+    fn clamp_offset(&mut self) {
+        if self.max_row_width > self.last_list_width {
+            let max_off = self.max_row_width.saturating_sub(self.last_list_width);
+            self.horiz_offset = self.horiz_offset.min(max_off);
+        } else {
+            self.horiz_offset = 0;
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct LogEntry {
     timestamp: String,
@@ -52,6 +63,7 @@ struct App {
     list_state: ListState,
     max_entries: usize,
     last_list_height: usize,
+    last_list_width: usize,
     last_detail_height: usize,
     detail_scroll: u16,
     detail_total_lines: usize,
@@ -64,6 +76,8 @@ struct App {
     input_mode: InputMode,
     filter_buffer: String,
     force_redraw: bool,
+    max_row_width: usize,
+    horiz_offset: usize,
 }
 
 impl App {
@@ -80,6 +94,7 @@ impl App {
             list_state,
             max_entries,
             last_list_height: 0,
+            last_list_width: 0,
             last_detail_height: 0,
             detail_scroll: 0,
             detail_total_lines: 0,
@@ -92,6 +107,8 @@ impl App {
             input_mode: InputMode::Normal,
             filter_buffer: String::new(),
             force_redraw: true,
+            max_row_width: 0,
+            horiz_offset: 0,
         }
     }
 
@@ -109,6 +126,7 @@ impl App {
         self.discover_columns(&entry.raw);
         self.entries.push(entry);
         self.rebuild_filtered(Some(SelectStrategy::Last));
+        self.horiz_offset = 0;
     }
 
     fn next(&mut self) {
@@ -235,6 +253,7 @@ impl App {
                 self.list_state
                     .select(Some(self.filtered_indices.len().saturating_sub(1)));
                 self.detail_scroll = 0;
+                self.horiz_offset = 0;
             }
             SelectStrategy::PreserveOrFirst => {
                 if let Some(prev_entry_idx) = prev_selected_entry {
@@ -245,11 +264,13 @@ impl App {
                     {
                         self.list_state.select(Some(new_pos));
                         self.detail_scroll = 0;
+                        self.horiz_offset = 0;
                         return;
                     }
                 }
                 self.list_state.select(Some(0));
                 self.detail_scroll = 0;
+                self.horiz_offset = 0;
             }
         }
     }
@@ -540,8 +561,30 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             }
                             KeyCode::Char('j') | KeyCode::Down => app.next(),
                             KeyCode::Char('k') | KeyCode::Up => app.previous(),
-                            KeyCode::Char('h') => app.previous(),
-                            KeyCode::Char('l') => app.next(),
+                            KeyCode::Char('h') => {
+                                let step = (app.last_list_width / 4).max(4);
+                                app.horiz_offset = app.horiz_offset.saturating_sub(step);
+                                app.clamp_offset();
+                            }
+                            KeyCode::Char('l') => {
+                                // horizontal scroll right
+                                let step = (app.last_list_width / 4).max(4);
+                                app.horiz_offset = app.horiz_offset.saturating_add(step);
+                                app.clamp_offset();
+                            }
+                            KeyCode::Char('0') => {
+                                app.horiz_offset = 0;
+                            }
+                            KeyCode::Char('$') => {
+                                if app.max_row_width > app.last_list_width {
+                                    app.horiz_offset = app
+                                        .max_row_width
+                                        .saturating_sub(app.last_list_width);
+                                } else {
+                                    app.horiz_offset = 0;
+                                }
+                                app.clamp_offset();
+                            }
                             KeyCode::Char('c') => {
                                 app.input_mode = InputMode::ColumnSelect;
                                 if app.column_select_state.selected().is_none() && !app.columns.is_empty() {
@@ -581,16 +624,18 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.force_redraw = true;
                             }
+                            KeyCode::Char('h') => app.detail_up(1),
+                            KeyCode::Char('l') => app.detail_down(1),
                             KeyCode::Char('c') => {
                                 app.input_mode = InputMode::ColumnSelect;
                                 if app.column_select_state.selected().is_none() && !app.columns.is_empty() {
                                     app.column_select_state.select(Some(0));
                                 }
                             }
-                            KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('l') => {
+                            KeyCode::Char('j') | KeyCode::Down => {
                                 app.detail_down(1)
                             }
-                            KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') => {
+                            KeyCode::Char('k') | KeyCode::Up => {
                                 app.detail_up(1)
                             }
                             KeyCode::Char('/') => {
@@ -676,19 +721,24 @@ fn ui(f: &mut Frame, app: &mut App) {
     };
 
     app.last_list_height = chunks[0].height.saturating_sub(2) as usize;
-    app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
-
     let list_width = chunks[0].width.saturating_sub(2) as usize;
+    app.last_list_width = list_width;
+    app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
     let enabled_columns: Vec<&ColumnDef> = app.columns.iter().filter(|c| c.enabled).collect();
+    let mut max_full_width = 0usize;
     let items: Vec<ListItem> = app
         .filtered_indices
         .iter()
         .filter_map(|&idx| app.entries.get(idx))
         .map(|entry| {
-            let content = render_row(entry, &enabled_columns, list_width);
-            ListItem::new(content).style(level_style(&entry.level))
+            let full = render_row(entry, &enabled_columns);
+            max_full_width = max_full_width.max(full.width());
+            let view = slice_row(&full, app.horiz_offset, list_width, max_full_width);
+            ListItem::new(view).style(level_style(&entry.level))
         })
         .collect();
+    app.max_row_width = max_full_width;
+    app.clamp_offset();
 
     let list_title = if app.filter_query.is_empty() {
         "Logs".to_string()
@@ -787,55 +837,44 @@ fn level_span(level: &str) -> Span<'static> {
     Span::styled(level.to_ascii_uppercase(), level_style(level))
 }
 
-fn render_row(entry: &LogEntry, cols: &[&ColumnDef], width: usize) -> String {
+fn render_row(entry: &LogEntry, cols: &[&ColumnDef]) -> String {
     if cols.is_empty() {
         return "[no columns selected]".to_string();
     }
     let n = cols.len();
     let separator = " | ";
-    let sep_width = separator.len() * (n.saturating_sub(1));
-    let per = if n == 0 {
-        width
-    } else {
-        width.saturating_sub(sep_width) / n.max(1)
-    }
-    .max(6);
     let mut parts = Vec::with_capacity(n);
     for col in cols {
         let val = extract_field_string(&entry.raw, &col.path).unwrap_or_default();
-        parts.push(truncate_cell(&val, per));
+        parts.push(val);
     }
     parts.join(separator)
 }
 
-fn truncate_cell(s: &str, width: usize) -> String {
-    if s.width() <= width {
-        s.to_string()
-    } else if width <= 1 {
-        "…".to_string()
-    } else if width <= 4 {
-        let mut out = String::new();
-        for ch in s.chars() {
-            if out.width() + ch.width().unwrap_or(1) >= width {
-                break;
-            }
-            out.push(ch);
+fn slice_row(s: &str, offset: usize, width: usize, total_width: usize) -> String {
+    let mut out = String::new();
+    let mut current_width = 0usize;
+
+    let mut skip_width = offset.min(total_width);
+
+    for ch in s.chars() {
+        let w = ch.width().unwrap_or(1);
+        if skip_width > 0 {
+            skip_width = skip_width.saturating_sub(w);
+            continue;
         }
-        out
-    } else {
-        let mut out = String::new();
-        let mut current = 0;
-        for ch in s.chars() {
-            let w = ch.width().unwrap_or(1);
-            if current + w >= width.saturating_sub(1) {
-                break;
-            }
-            out.push(ch);
-            current += w;
+        if current_width + w > width {
+            break;
         }
-        out.push('…');
-        out
+        out.push(ch);
+        current_width += w;
     }
+
+    if current_width < width {
+        out.push_str(&" ".repeat(width.saturating_sub(current_width)));
+    }
+
+    out
 }
 
 fn extract_field_string<'a>(value: &'a Value, path: &[String]) -> Option<String> {
