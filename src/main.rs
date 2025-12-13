@@ -270,6 +270,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             KeyCode::Char('k') | KeyCode::Up => app.previous(),
                             KeyCode::Char('h') => app.previous(),
                             KeyCode::Char('l') => app.next(),
+                            KeyCode::Char('e') => {
+                                if let Some(entry) = app.current_entry() {
+                                    open_entry_in_editor(terminal, &entry)?;
+                                }
+                            }
                             KeyCode::Char('g') => app.select_first(),
                             KeyCode::Char('G') => app.select_last(),
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -513,6 +518,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "List",
             keys: "Enter, Tab, Right",
             description: "Focus details",
+        },
+        Shortcut {
+            context: "List",
+            keys: "e",
+            description: "Open entry in $EDITOR",
         },
         Shortcut {
             context: "Detail",
