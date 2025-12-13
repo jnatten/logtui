@@ -9,6 +9,7 @@ A fast, keyboard-driven TUI for exploring structured (JSON) logs from stdin or f
 - **Regex filtering**: Hit `/`, type a regex, Enter to apply; status bar shows active filter/errors.
 - **Column control**: Toggle and reorder columns (including dynamically discovered fields) via `c`; horizontal scroll with `h/l`, jump with `0/$`.
 - **Nested field fallback**: Automatically picks `timestamp/level/message` from top-level or `data.*`.
+- **Graceful for plain text**: Non-JSON lines render as `TEXT` with the raw content.
 - **Colorized levels & JSON**: Levels are colored per severity; details JSON is syntax-highlighted.
 
 ## 🚀 Quick start

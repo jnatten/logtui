@@ -755,7 +755,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .map(|entry| {
             let full = render_row(entry, &enabled_columns);
             max_full_width = max_full_width.max(full.width());
-            let view = slice_row(&full, app.horiz_offset, list_width, max_full_width);
+            let view = slice_row(&full, app.horiz_offset, list_width);
             ListItem::new(view).style(level_style(&entry.level))
         })
         .collect();
@@ -851,6 +851,7 @@ fn level_style(level: &str) -> Style {
         "ERROR" => Style::default().fg(Color::Red),
         "CRITICAL" => Style::default().fg(Color::LightRed),
         "PARSE" => Style::default().fg(Color::Magenta),
+        "TEXT" => Style::default().fg(Color::Gray),
         _ => Style::default(),
     }
 }
@@ -867,17 +868,17 @@ fn render_row(entry: &LogEntry, cols: &[&ColumnDef]) -> String {
     let separator = " | ";
     let mut parts = Vec::with_capacity(n);
     for col in cols {
-        let val = extract_field_string(&entry.raw, &col.path).unwrap_or_default();
+        let val = entry_field_or_raw(entry, &col.path).unwrap_or_default();
         parts.push(val);
     }
     parts.join(separator)
 }
 
-fn slice_row(s: &str, offset: usize, width: usize, total_width: usize) -> String {
+fn slice_row(s: &str, offset: usize, width: usize) -> String {
     let mut out = String::new();
     let mut current_width = 0usize;
 
-    let mut skip_width = offset.min(total_width);
+    let mut skip_width = offset;
 
     for ch in s.chars() {
         let w = ch.width().unwrap_or(1);
@@ -900,6 +901,17 @@ fn slice_row(s: &str, offset: usize, width: usize, total_width: usize) -> String
 }
 
 fn extract_field_string<'a>(value: &'a Value, path: &[String]) -> Option<String> {
+    if let Value::String(s) = value {
+        if path.len() == 1 {
+            match path[0].as_str() {
+                "timestamp" => return Some("-".into()),
+                "level" => return Some("TEXT".into()),
+                "message" => return Some(s.clone()),
+                _ => {}
+            }
+        }
+    }
+
     let mut current = value;
     for key in path {
         current = current.get(key)?;
@@ -911,6 +923,18 @@ fn extract_field_string<'a>(value: &'a Value, path: &[String]) -> Option<String>
         Value::Null => Some("null".into()),
         other => Some(other.to_string()),
     }
+}
+
+fn entry_field_or_raw(entry: &LogEntry, path: &[String]) -> Option<String> {
+    if path.len() == 1 {
+        match path[0].as_str() {
+            "timestamp" => return Some(entry.timestamp.clone()),
+            "level" => return Some(entry.level.clone()),
+            "message" => return Some(entry.message.clone()),
+            _ => {}
+        }
+    }
+    extract_field_string(&entry.raw, path)
 }
 
 fn open_entry_in_editor<B: Backend>(terminal: &mut Terminal<B>, entry: &LogEntry) -> Result<()> {
@@ -1331,37 +1355,45 @@ fn spawn_reader(input: InputSource, tx: mpsc::Sender<LogEntry>) {
 }
 
 fn parse_log_line(line: &str) -> Result<LogEntry> {
-    let value: Value = serde_json::from_str(line).context("invalid JSON")?;
+    match serde_json::from_str::<Value>(line) {
+        Ok(value) => {
+            let timestamp = {
+                let ts = extract_timestamp(&value);
+                if ts == "-" {
+                    if let Some(data) = value.get("data") {
+                        extract_timestamp(data)
+                    } else {
+                        ts
+                    }
+                } else {
+                    ts
+                }
+            };
 
-    let timestamp = {
-        let ts = extract_timestamp(&value);
-        if ts == "-" {
-            if let Some(data) = value.get("data") {
-                extract_timestamp(data)
-            } else {
-                ts
-            }
-        } else {
-            ts
+            let level = find_str(&value, "level")
+                .or_else(|| value.get("data").and_then(|d| find_str(d, "level")))
+                .unwrap_or("UNKNOWN")
+                .to_string();
+
+            let message = find_str(&value, "message")
+                .or_else(|| value.get("data").and_then(|d| find_str(d, "message")))
+                .unwrap_or("")
+                .to_string();
+
+            Ok(LogEntry {
+                timestamp,
+                level,
+                message,
+                raw: value,
+            })
         }
-    };
-
-    let level = find_str(&value, "level")
-        .or_else(|| value.get("data").and_then(|d| find_str(d, "level")))
-        .unwrap_or("UNKNOWN")
-        .to_string();
-
-    let message = find_str(&value, "message")
-        .or_else(|| value.get("data").and_then(|d| find_str(d, "message")))
-        .unwrap_or("")
-        .to_string();
-
-    Ok(LogEntry {
-        timestamp,
-        level,
-        message,
-        raw: value,
-    })
+        Err(_) => Ok(LogEntry {
+            timestamp: "-".into(),
+            level: "TEXT".into(),
+            message: line.to_string(),
+            raw: Value::String(line.to_string()),
+        }),
+    }
 }
 
 fn find_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
