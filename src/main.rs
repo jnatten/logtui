@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat};
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -43,6 +43,11 @@ struct App {
     entries: Vec<LogEntry>,
     list_state: ListState,
     max_entries: usize,
+    last_list_height: usize,
+    last_detail_height: usize,
+    detail_scroll: u16,
+    detail_total_lines: usize,
+    focus: Focus,
 }
 
 impl App {
@@ -53,6 +58,11 @@ impl App {
             entries: Vec::new(),
             list_state,
             max_entries,
+            last_list_height: 0,
+            last_detail_height: 0,
+            detail_scroll: 0,
+            detail_total_lines: 0,
+            focus: Focus::List,
         }
     }
 
@@ -70,6 +80,7 @@ impl App {
         self.entries.push(entry);
         let last = self.entries.len().saturating_sub(1);
         self.list_state.select(Some(last));
+        self.detail_scroll = 0;
     }
 
     fn next(&mut self) {
@@ -79,6 +90,7 @@ impl App {
         let i = self.list_state.selected().unwrap_or(0);
         let next = (i + 1).min(self.entries.len() - 1);
         self.list_state.select(Some(next));
+        self.detail_scroll = 0;
     }
 
     fn previous(&mut self) {
@@ -88,6 +100,29 @@ impl App {
         let i = self.list_state.selected().unwrap_or(0);
         let prev = i.saturating_sub(1);
         self.list_state.select(Some(prev));
+        self.detail_scroll = 0;
+    }
+
+    fn page_down(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let half = (self.last_list_height.max(1) / 2).max(1);
+        let i = self.list_state.selected().unwrap_or(0);
+        let next = (i + half).min(self.entries.len() - 1);
+        self.list_state.select(Some(next));
+        self.detail_scroll = 0;
+    }
+
+    fn page_up(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let half = (self.last_list_height.max(1) / 2).max(1);
+        let i = self.list_state.selected().unwrap_or(0);
+        let prev = i.saturating_sub(half);
+        self.list_state.select(Some(prev));
+        self.detail_scroll = 0;
     }
 
     fn select_last(&mut self) {
@@ -96,6 +131,7 @@ impl App {
         } else {
             self.list_state.select(Some(self.entries.len() - 1));
         }
+        self.detail_scroll = 0;
     }
 
     fn select_first(&mut self) {
@@ -104,7 +140,45 @@ impl App {
         } else {
             self.list_state.select(Some(0));
         }
+        self.detail_scroll = 0;
     }
+
+    fn detail_down(&mut self, lines: usize) {
+        if self.detail_total_lines == 0 {
+            return;
+        }
+        let max_offset = self
+            .detail_total_lines
+            .saturating_sub(self.last_detail_height.max(1));
+        let new = (self.detail_scroll as usize + lines).min(max_offset);
+        self.detail_scroll = new as u16;
+    }
+
+    fn detail_up(&mut self, lines: usize) {
+        let new = self.detail_scroll.saturating_sub(lines as u16);
+        self.detail_scroll = new;
+    }
+
+    fn detail_top(&mut self) {
+        self.detail_scroll = 0;
+    }
+
+    fn detail_bottom(&mut self) {
+        if self.detail_total_lines == 0 {
+            self.detail_scroll = 0;
+            return;
+        }
+        let max_offset = self
+            .detail_total_lines
+            .saturating_sub(self.last_detail_height.max(1));
+        self.detail_scroll = max_offset as u16;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Focus {
+    List,
+    Detail,
 }
 
 enum InputSource {
@@ -156,14 +230,54 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
 
         if event::poll(Duration::from_millis(100)).context("polling for events")? {
             match event::read().context("reading event")? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('j') | KeyCode::Down => app.next(),
-                    KeyCode::Char('k') | KeyCode::Up => app.previous(),
-                    KeyCode::Char('g') => app.select_first(),
-                    KeyCode::Char('G') => app.select_last(),
-                    _ => {}
-                },
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if key.code == KeyCode::Char('q') {
+                        break;
+                    }
+
+                    match app.focus {
+                        Focus::List => match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => app.next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.previous(),
+                            KeyCode::Char('h') => app.previous(),
+                            KeyCode::Char('l') => app.next(),
+                            KeyCode::Char('g') => app.select_first(),
+                            KeyCode::Char('G') => app.select_last(),
+                            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.page_down()
+                            }
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                app.page_up()
+                            }
+                            KeyCode::Enter | KeyCode::Tab | KeyCode::Right => {
+                                app.focus = Focus::Detail;
+                            }
+                            _ => {}
+                        },
+                        Focus::Detail => match key.code {
+                            KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('l') => {
+                                app.detail_down(1)
+                            }
+                            KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') => {
+                                app.detail_up(1)
+                            }
+                            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                let half = (app.last_detail_height.max(1) / 2).max(1);
+                                app.detail_down(half);
+                            }
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                let half = (app.last_detail_height.max(1) / 2).max(1);
+                                app.detail_up(half);
+                            }
+                            KeyCode::Char('g') => app.detail_top(),
+                            KeyCode::Char('G') => app.detail_bottom(),
+                            KeyCode::Tab | KeyCode::Esc | KeyCode::Left => {
+                                app.focus = Focus::List;
+                            }
+                            _ => {}
+                        },
+                    }
+                }
                 Event::Resize(_, _) => {}
                 _ => {}
             }
@@ -180,6 +294,9 @@ fn ui(f: &mut Frame, app: &mut App) {
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(area);
 
+    app.last_list_height = chunks[0].height.saturating_sub(2) as usize;
+    app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
+
     let items: Vec<ListItem> = app
         .entries
         .iter()
@@ -194,17 +311,42 @@ fn ui(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
+    let list_block = Block::default()
+        .title("Logs")
+        .borders(Borders::ALL)
+        .border_style(match app.focus {
+            Focus::List => Style::default().fg(Color::Cyan),
+            Focus::Detail => Style::default(),
+        });
+
     let list = List::new(items)
-        .block(Block::default().title("Logs").borders(Borders::ALL))
+        .block(list_block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▸ ");
 
     f.render_stateful_widget(list, chunks[0], &mut app.list_state);
 
-    let detail = selected_details(app);
-    let detail = Paragraph::new(detail)
-        .block(Block::default().title("Details").borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
+    let detail_text = selected_details(app);
+    app.detail_total_lines = detail_text.lines().count();
+    let max_offset = app
+        .detail_total_lines
+        .saturating_sub(app.last_detail_height.max(1));
+    if app.detail_scroll as usize > max_offset {
+        app.detail_scroll = max_offset as u16;
+    }
+
+    let detail_block = Block::default()
+        .title("Details")
+        .borders(Borders::ALL)
+        .border_style(match app.focus {
+            Focus::Detail => Style::default().fg(Color::Cyan),
+            Focus::List => Style::default(),
+        });
+
+    let detail = Paragraph::new(detail_text)
+        .block(detail_block)
+        .wrap(Wrap { trim: false })
+        .scroll((app.detail_scroll, 0));
     f.render_widget(detail, chunks[1]);
 }
 
