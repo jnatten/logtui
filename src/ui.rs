@@ -149,7 +149,6 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
     };
 
     let chunks = match app.field_zoom {
-        Some(FieldZoom::Fields) => vec![area, Rect::new(0, 0, 0, 0)],
         Some(FieldZoom::Detail) => vec![Rect::new(0, 0, 0, 0), area],
         None => Layout::default()
             .direction(Direction::Horizontal)

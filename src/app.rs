@@ -473,7 +473,6 @@ impl FieldViewState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldZoom {
-    Fields,
     Detail,
 }
 
@@ -521,8 +520,7 @@ fn collect_fields(value: &Value) -> Vec<FieldEntry> {
 fn cycle_field_zoom(app: &mut App) {
     app.field_zoom = match app.field_zoom {
         None => Some(FieldZoom::Detail),
-        Some(FieldZoom::Detail) => Some(FieldZoom::Fields),
-        Some(FieldZoom::Fields) => None,
+        Some(FieldZoom::Detail) => None,
     };
 }
 
