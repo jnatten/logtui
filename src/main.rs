@@ -247,7 +247,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
         if event::poll(Duration::from_millis(100)).context("polling for events")? {
             match event::read().context("reading event")? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if key.code == KeyCode::Char('q') {
+                    if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
                         break;
                     }
                     if key.code == KeyCode::Char('?') {
@@ -484,6 +484,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Global",
+            keys: "Ctrl+C",
+            description: "Quit",
+        },
+        Shortcut {
+            context: "Global",
             keys: "?",
             description: "Toggle help",
         },
@@ -536,12 +541,6 @@ fn all_shortcuts() -> Vec<Shortcut> {
 }
 
 fn render_help(f: &mut Frame, area: Rect) {
-    let width = (area.width.saturating_sub(10)).min(90).max(50);
-    let height = (area.height.saturating_sub(6)).min(20).max(10);
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    let popup = Rect::new(x, y, width, height);
-
     let mut lines: Vec<Line> = Vec::new();
     let mut entries = all_shortcuts();
     entries.sort_by(|a, b| a.context.cmp(b.context));
@@ -565,6 +564,14 @@ fn render_help(f: &mut Frame, area: Rect) {
             Span::raw(sc.description),
         ]));
     }
+
+    let width = (area.width.saturating_sub(10)).min(90).max(50);
+    let needed_height = (lines.len() as u16).saturating_add(2);
+    let max_allowed = area.height.saturating_sub(2);
+    let height = needed_height.min(max_allowed).max(8);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
 
     let block = Block::default().title("Shortcuts").borders(Borders::ALL);
     let help = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
