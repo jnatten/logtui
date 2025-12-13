@@ -281,7 +281,13 @@ impl App {
         }
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        self.field_view = Some(FieldViewState { fields, list_state });
+        let filtered_indices = (0..fields.len()).collect();
+        self.field_view = Some(FieldViewState {
+            fields,
+            filtered_indices,
+            list_state,
+            filter: String::new(),
+        });
         self.field_detail_scroll = 0;
         self.field_detail_total_lines = 0;
         self.last_field_detail_height = 0;
@@ -434,7 +440,31 @@ pub struct FieldEntry {
 
 pub struct FieldViewState {
     pub fields: Vec<FieldEntry>,
+    pub filtered_indices: Vec<usize>,
     pub list_state: ListState,
+    pub filter: String,
+}
+
+impl FieldViewState {
+    fn rebuild_filter(&mut self) -> bool {
+        let old_selection = self.list_state.selected();
+        let filter = self.filter.to_lowercase();
+        self.filtered_indices.clear();
+        for (idx, field) in self.fields.iter().enumerate() {
+            if filter.is_empty() || field.path.to_lowercase().contains(&filter) {
+                self.filtered_indices.push(idx);
+            }
+        }
+        if self.filtered_indices.is_empty() {
+            self.list_state.select(None);
+        } else {
+            match old_selection {
+                Some(sel) if sel < self.filtered_indices.len() => {}
+                _ => self.list_state.select(Some(0)),
+            }
+        }
+        old_selection != self.list_state.selected()
+    }
 }
 
 fn collect_fields(value: &Value) -> Vec<FieldEntry> {
@@ -528,28 +558,65 @@ pub fn run_app<B: Backend>(
                         if let Some(fv) = app.field_view.as_mut() {
                             match key.code {
                                 KeyCode::Char('q') => app.exit_field_view(),
+                                KeyCode::Backspace => {
+                                    if !fv.filter.is_empty() {
+                                        fv.filter.pop();
+                                        let changed = fv.rebuild_filter();
+                                        if changed {
+                                            app.field_detail_scroll = 0;
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    if !fv.filter.is_empty() {
+                                        fv.filter.clear();
+                                        let changed = fv.rebuild_filter();
+                                        if changed {
+                                            app.field_detail_scroll = 0;
+                                        }
+                                    }
+                                }
+                                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    fv.filter.push(c);
+                                    let changed = fv.rebuild_filter();
+                                    if changed {
+                                        app.field_detail_scroll = 0;
+                                    }
+                                }
                                 KeyCode::Down | KeyCode::Char('j') => {
-                                    let len = fv.fields.len();
+                                    if fv.filtered_indices.is_empty() {
+                                        continue;
+                                    }
+                                    let len = fv.filtered_indices.len();
                                     let next = fv
                                         .list_state
                                         .selected()
                                         .map(|i| (i + 1).min(len.saturating_sub(1)))
                                         .or(Some(0));
                                     fv.list_state.select(next);
+                                    app.field_detail_scroll = 0;
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
+                                    if fv.filtered_indices.is_empty() {
+                                        continue;
+                                    }
                                     let prev = fv
                                         .list_state
                                         .selected()
                                         .map(|i| i.saturating_sub(1))
                                         .or(Some(0));
                                     fv.list_state.select(prev);
+                                    app.field_detail_scroll = 0;
                                 }
-                                KeyCode::Char('g') => fv.list_state.select(Some(0)),
+                                KeyCode::Char('g') => {
+                                    fv.list_state.select(Some(0));
+                                    app.field_detail_scroll = 0;
+                                }
                                 KeyCode::Char('G') => {
-                                    if !fv.fields.is_empty() {
+                                    if !fv.filtered_indices.is_empty() {
                                         fv.list_state
-                                            .select(Some(fv.fields.len().saturating_sub(1)));
+                                            .select(Some(fv.filtered_indices.len().saturating_sub(1)));
+                                        app.field_detail_scroll = 0;
                                     }
                                 }
                                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {

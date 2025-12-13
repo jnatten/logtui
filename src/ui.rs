@@ -6,7 +6,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    app::{App, ColumnDef, FieldEntry, Focus, InputMode},
+    app::{App, ColumnDef, FieldEntry, FieldViewState, Focus, InputMode},
     model::LogEntry,
 };
 
@@ -154,17 +154,14 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
         .split(area);
 
     let items: Vec<ListItem> = field_view
-        .fields
+        .filtered_indices
         .iter()
+        .filter_map(|&idx| field_view.fields.get(idx))
         .map(|field| ListItem::new(field.path.clone()))
         .collect();
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .title("Fields (Ctrl+T or Esc to close)")
-                .borders(Borders::ALL),
-        )
+        .block(Block::default().title(field_title(field_view)).borders(Borders::ALL))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▸ ");
 
@@ -173,7 +170,8 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
     let selected = field_view
         .list_state
         .selected()
-        .and_then(|i| field_view.fields.get(i));
+        .and_then(|i| field_view.filtered_indices.get(i))
+        .and_then(|&idx| field_view.fields.get(idx));
     let detail_text = match selected {
         Some(entry) => field_value_text(entry),
         None => Text::from("Select a field"),
@@ -230,6 +228,14 @@ fn render_json_text(value: &serde_json::Value) -> Text<'static> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     render_value(value, 0, false, &mut lines);
     Text::from(lines)
+}
+
+fn field_title(field_view: &FieldViewState) -> String {
+    if field_view.filter.is_empty() {
+        "Fields (Ctrl+T or Esc to close)".to_string()
+    } else {
+        format!("Fields (filter: {})", field_view.filter)
+    }
 }
 
 fn level_style(level: &str) -> Style {
