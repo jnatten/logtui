@@ -15,6 +15,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde_json::{json, Value};
@@ -327,7 +328,12 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     f.render_stateful_widget(list, chunks[0], &mut app.list_state);
 
-    let detail_text = selected_details(app);
+    let selected_entry = app
+        .list_state
+        .selected()
+        .and_then(|i| app.entries.get(i))
+        .cloned();
+    let detail_text = selected_details(selected_entry);
     let inner_width = chunks[1].width.saturating_sub(2) as usize;
     app.detail_total_lines = wrapped_height(&detail_text, inner_width);
     let max_offset = app
@@ -352,21 +358,17 @@ fn ui(f: &mut Frame, app: &mut App) {
     f.render_widget(detail, chunks[1]);
 }
 
-fn selected_details(app: &App) -> String {
-    let Some(idx) = app.list_state.selected() else {
-        return "Waiting for logs...".to_string();
+fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
+    let Some(entry) = entry else {
+        return Text::from("Waiting for logs...");
     };
-    if let Some(entry) = app.entries.get(idx) {
-        let mut header = format!(
-            "timestamp: {}\nlevel: {}\nmessage: {}\n\n",
-            entry.timestamp, entry.level, entry.message
-        );
-        let formatted = serde_json::to_string_pretty(&entry.raw).unwrap_or_else(|_| entry.raw.to_string());
-        header.push_str(&formatted);
-        header
-    } else {
-        "Waiting for logs...".to_string()
-    }
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(format!("timestamp: {}", entry.timestamp)));
+    lines.push(Line::from(format!("level: {}", entry.level)));
+    lines.push(Line::from(format!("message: {}", entry.message)));
+    lines.push(Line::from(""));
+    render_value(&entry.raw, 0, false, &mut lines);
+    Text::from(lines)
 }
 
 fn level_style(level: &str) -> Style {
@@ -381,15 +383,124 @@ fn level_style(level: &str) -> Style {
     }
 }
 
-fn wrapped_height(text: &str, width: usize) -> usize {
+fn indent_span(indent: usize) -> Span<'static> {
+    Span::raw(" ".repeat(indent))
+}
+
+fn render_value(
+    value: &Value,
+    indent: usize,
+    trailing_comma: bool,
+    out: &mut Vec<Line<'static>>,
+) {
+    match value {
+        Value::Object(map) => render_object(map, indent, trailing_comma, out),
+        Value::Array(arr) => render_array(arr, indent, trailing_comma, out),
+        _ => {
+            let mut spans = vec![indent_span(indent)];
+            spans.extend(render_primitive_spans(value));
+            if trailing_comma {
+                spans.push(Span::raw(","));
+            }
+            out.push(Line::from(spans));
+        }
+    }
+}
+
+fn render_object(
+    map: &serde_json::Map<String, Value>,
+    indent: usize,
+    trailing_comma: bool,
+    out: &mut Vec<Line<'static>>,
+) {
+    out.push(Line::from(vec![indent_span(indent), Span::raw("{")]));
+    let len = map.len();
+    for (idx, (key, value)) in map.iter().enumerate() {
+        let is_last = idx + 1 == len;
+        let mut spans = vec![
+            indent_span(indent + 2),
+            Span::styled(format!("\"{}\"", key), Style::default().fg(Color::Cyan)),
+            Span::raw(": "),
+        ];
+        match value {
+            Value::Object(_) | Value::Array(_) => {
+                out.push(Line::from(spans));
+                render_value(value, indent + 2, !is_last, out);
+            }
+            _ => {
+                spans.extend(render_primitive_spans(value));
+                if !is_last {
+                    spans.push(Span::raw(","));
+                }
+                out.push(Line::from(spans));
+            }
+        }
+    }
+    let mut closing = vec![indent_span(indent), Span::raw("}")];
+    if trailing_comma {
+        closing.push(Span::raw(","));
+    }
+    out.push(Line::from(closing));
+}
+
+fn render_array(
+    arr: &[Value],
+    indent: usize,
+    trailing_comma: bool,
+    out: &mut Vec<Line<'static>>,
+) {
+    out.push(Line::from(vec![indent_span(indent), Span::raw("[")]));
+    let len = arr.len();
+    for (idx, value) in arr.iter().enumerate() {
+        let is_last = idx + 1 == len;
+        match value {
+            Value::Object(_) | Value::Array(_) => {
+                render_value(value, indent + 2, !is_last, out);
+            }
+            _ => {
+                let mut spans = vec![indent_span(indent + 2)];
+                spans.extend(render_primitive_spans(value));
+                if !is_last {
+                    spans.push(Span::raw(","));
+                }
+                out.push(Line::from(spans));
+            }
+        }
+    }
+    let mut closing = vec![indent_span(indent), Span::raw("]")];
+    if trailing_comma {
+        closing.push(Span::raw(","));
+    }
+    out.push(Line::from(closing));
+}
+
+fn render_primitive_spans(value: &Value) -> Vec<Span<'static>> {
+    match value {
+        Value::String(s) => vec![Span::styled(format!("\"{s}\""), Style::default().fg(Color::Green))],
+        Value::Number(num) => vec![Span::styled(num.to_string(), Style::default().fg(Color::Yellow))],
+        Value::Bool(b) => vec![Span::styled(b.to_string(), Style::default().fg(Color::Magenta))],
+        Value::Null => vec![Span::styled("null", Style::default().fg(Color::Gray))],
+        _ => vec![Span::raw(value.to_string())],
+    }
+}
+
+fn wrapped_height(text: &Text<'_>, width: usize) -> usize {
     let effective_width = width.max(1);
     let mut total = 0usize;
-    for line in text.lines() {
-        let line_width = UnicodeWidthStr::width(line);
-        let wrapped = if line_width == 0 { 1 } else { (line_width + effective_width - 1) / effective_width };
+    for line in &text.lines {
+        let line_width: usize = line
+            .spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        let wrapped = if line_width == 0 {
+            1
+        } else {
+            (line_width + effective_width - 1) / effective_width
+        };
         total += wrapped.max(1);
     }
-    if text.is_empty() {
+    if text.lines.is_empty() {
         0
     } else {
         total
