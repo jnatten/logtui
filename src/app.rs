@@ -141,6 +141,7 @@ impl App {
         let next = (i + 1).min(self.filtered_indices.len() - 1);
         self.list_state.select(Some(next));
         self.detail_scroll = 0;
+        self.force_redraw = true;
     }
 
     pub fn previous(&mut self) {
@@ -151,6 +152,7 @@ impl App {
         let prev = i.saturating_sub(1);
         self.list_state.select(Some(prev));
         self.detail_scroll = 0;
+        self.force_redraw = true;
     }
 
     pub fn page_down(&mut self) {
@@ -162,6 +164,7 @@ impl App {
         let next = (i + half).min(self.filtered_indices.len() - 1);
         self.list_state.select(Some(next));
         self.detail_scroll = 0;
+        self.force_redraw = true;
     }
 
     pub fn page_up(&mut self) {
@@ -173,6 +176,7 @@ impl App {
         let prev = i.saturating_sub(half);
         self.list_state.select(Some(prev));
         self.detail_scroll = 0;
+        self.force_redraw = true;
     }
 
     pub fn select_last(&mut self) {
@@ -182,6 +186,7 @@ impl App {
             self.list_state.select(Some(self.filtered_indices.len() - 1));
         }
         self.detail_scroll = 0;
+        self.force_redraw = true;
     }
 
     pub fn select_first(&mut self) {
@@ -191,6 +196,7 @@ impl App {
             self.list_state.select(Some(0));
         }
         self.detail_scroll = 0;
+        self.force_redraw = true;
     }
 
     pub fn current_entry(&self) -> Option<LogEntry> {

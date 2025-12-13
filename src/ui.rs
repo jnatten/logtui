@@ -1,7 +1,7 @@
 use ratatui::{
     prelude::*,
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -57,7 +57,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
     app.last_list_height = chunks[0].height.saturating_sub(2) as usize;
     let list_width = chunks[0].width.saturating_sub(2) as usize;
     app.last_list_width = list_width;
-    app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
     let enabled_columns: Vec<&ColumnDef> = app.columns.iter().filter(|c| c.enabled).collect();
     let mut max_full_width = 0usize;
     let items: Vec<ListItem> = app
@@ -102,8 +101,20 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .and_then(|i| app.filtered_indices.get(i))
             .and_then(|&idx| app.entries.get(idx))
             .cloned();
+        let detail_block = Block::default()
+            .title("Details")
+            .borders(Borders::ALL)
+            .padding(Padding::uniform(1))
+            .border_style(match app.focus {
+                Focus::Detail => Style::default().fg(Color::Cyan),
+                Focus::List => Style::default(),
+            });
+
+        let inner = detail_block.inner(chunks[1]);
+        app.last_detail_height = inner.height as usize;
+
         let detail_text = selected_details(selected_entry);
-        let inner_width = chunks[1].width.saturating_sub(2) as usize;
+        let inner_width = inner.width as usize;
         app.detail_total_lines = wrapped_height(&detail_text, inner_width);
         let max_offset = app
             .detail_total_lines
@@ -111,14 +122,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
         if app.detail_scroll as usize > max_offset {
             app.detail_scroll = max_offset as u16;
         }
-
-        let detail_block = Block::default()
-            .title("Details")
-            .borders(Borders::ALL)
-            .border_style(match app.focus {
-                Focus::Detail => Style::default().fg(Color::Cyan),
-                Focus::List => Style::default(),
-            });
 
         let detail = Paragraph::new(detail_text)
             .block(detail_block)
@@ -182,8 +185,18 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
             None => Text::from("Select a field"),
         };
 
-        let inner_width = chunks[1].width.saturating_sub(2) as usize;
-        app.last_field_detail_height = chunks[1].height.saturating_sub(2) as usize;
+        let title = selected
+            .map(|s| format!("Field: {}", s.path))
+            .unwrap_or_else(|| "Field".to_string());
+        let detail_block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .padding(Padding::uniform(1));
+
+        let inner = detail_block.inner(chunks[1]);
+        app.last_field_detail_height = inner.height as usize;
+
+        let inner_width = inner.width as usize;
         app.field_detail_total_lines = wrapped_height(&detail_text, inner_width);
         let max_offset = app
             .field_detail_total_lines
@@ -192,10 +205,6 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
             app.field_detail_scroll = max_offset as u16;
         }
 
-        let title = selected
-            .map(|s| format!("Field: {}", s.path))
-            .unwrap_or_else(|| "Field".to_string());
-        let detail_block = Block::default().title(title).borders(Borders::ALL);
         let detail = Paragraph::new(detail_text)
             .block(detail_block)
             .wrap(Wrap { trim: false })
