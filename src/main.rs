@@ -364,7 +364,10 @@ fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
     };
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(format!("timestamp: {}", entry.timestamp)));
-    lines.push(Line::from(format!("level: {}", entry.level)));
+    lines.push(Line::from(vec![
+        Span::raw("level: "),
+        level_span(&entry.level),
+    ]));
     lines.push(Line::from(format!("message: {}", entry.message)));
     lines.push(Line::from(""));
     render_value(&entry.raw, 0, false, &mut lines);
@@ -373,14 +376,19 @@ fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
 
 fn level_style(level: &str) -> Style {
     match level.to_ascii_uppercase().as_str() {
-        "ERROR" => Style::default().fg(Color::Red),
+        "TRACE" => Style::default().fg(Color::LightGreen),
+        "DEBUG" => Style::default().fg(Color::LightMagenta),
+        "INFO" => Style::default().fg(Color::LightBlue),
         "WARN" | "WARNING" => Style::default().fg(Color::Yellow),
-        "INFO" => Style::default().fg(Color::Green),
-        "DEBUG" => Style::default().fg(Color::Cyan),
-        "TRACE" => Style::default().fg(Color::Gray),
+        "ERROR" => Style::default().fg(Color::Red),
+        "CRITICAL" => Style::default().fg(Color::LightRed),
         "PARSE" => Style::default().fg(Color::Magenta),
         _ => Style::default(),
     }
+}
+
+fn level_span(level: &str) -> Span<'static> {
+    Span::styled(level.to_ascii_uppercase(), level_style(level))
 }
 
 fn indent_span(indent: usize) -> Span<'static> {
