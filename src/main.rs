@@ -1025,15 +1025,26 @@ fn spawn_reader(input: InputSource, tx: mpsc::Sender<LogEntry>) {
 fn parse_log_line(line: &str) -> Result<LogEntry> {
     let value: Value = serde_json::from_str(line).context("invalid JSON")?;
 
-    let timestamp = extract_timestamp(&value);
-    let level = value
-        .get("level")
-        .and_then(|v| v.as_str())
+    let timestamp = {
+        let ts = extract_timestamp(&value);
+        if ts == "-" {
+            if let Some(data) = value.get("data") {
+                extract_timestamp(data)
+            } else {
+                ts
+            }
+        } else {
+            ts
+        }
+    };
+
+    let level = find_str(&value, "level")
+        .or_else(|| value.get("data").and_then(|d| find_str(d, "level")))
         .unwrap_or("UNKNOWN")
         .to_string();
-    let message = value
-        .get("message")
-        .and_then(|v| v.as_str())
+
+    let message = find_str(&value, "message")
+        .or_else(|| value.get("data").and_then(|d| find_str(d, "message")))
         .unwrap_or("")
         .to_string();
 
@@ -1043,6 +1054,10 @@ fn parse_log_line(line: &str) -> Result<LogEntry> {
         message,
         raw: value,
     })
+}
+
+fn find_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(|v| v.as_str())
 }
 
 fn extract_timestamp(value: &Value) -> String {
