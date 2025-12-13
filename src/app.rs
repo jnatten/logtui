@@ -36,6 +36,7 @@ pub enum InputMode {
     Normal,
     FilterInput,
     ColumnSelect,
+    FieldView,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +68,10 @@ pub struct App {
     pub force_redraw: bool,
     pub max_row_width: usize,
     pub horiz_offset: usize,
+    pub field_view: Option<FieldViewState>,
+    pub field_detail_scroll: u16,
+    pub field_detail_total_lines: usize,
+    pub last_field_detail_height: usize,
 }
 
 impl App {
@@ -98,6 +103,10 @@ impl App {
             force_redraw: true,
             max_row_width: 0,
             horiz_offset: 0,
+            field_view: None,
+            field_detail_scroll: 0,
+            field_detail_total_lines: 0,
+            last_field_detail_height: 0,
         }
     }
 
@@ -262,6 +271,31 @@ impl App {
         }
     }
 
+    pub fn enter_field_view(&mut self) {
+        let Some(entry) = self.current_entry() else {
+            return;
+        };
+        let fields = collect_fields(&entry.raw);
+        if fields.is_empty() {
+            return;
+        }
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        self.field_view = Some(FieldViewState { fields, list_state });
+        self.field_detail_scroll = 0;
+        self.field_detail_total_lines = 0;
+        self.last_field_detail_height = 0;
+        self.input_mode = InputMode::FieldView;
+    }
+
+    pub fn exit_field_view(&mut self) {
+        self.field_view = None;
+        self.field_detail_scroll = 0;
+        self.field_detail_total_lines = 0;
+        self.last_field_detail_height = 0;
+        self.input_mode = InputMode::Normal;
+    }
+
     fn matches_filter(&self, entry: &LogEntry) -> bool {
         if let Some(re) = &self.filter_regex {
             let hay = format!(
@@ -392,6 +426,58 @@ fn is_reserved_column(key: &str) -> bool {
     matches!(key, "timestamp" | "level" | "message" | "instant" | "data")
 }
 
+#[derive(Clone)]
+pub struct FieldEntry {
+    pub path: String,
+    pub value: Value,
+}
+
+pub struct FieldViewState {
+    pub fields: Vec<FieldEntry>,
+    pub list_state: ListState,
+}
+
+fn collect_fields(value: &Value) -> Vec<FieldEntry> {
+    fn walk(value: &Value, path: String, out: &mut Vec<FieldEntry>) {
+        let display_path = if path.is_empty() {
+            "(root)".to_string()
+        } else {
+            path.clone()
+        };
+        out.push(FieldEntry {
+            path: display_path,
+            value: value.clone(),
+        });
+        match value {
+            Value::Object(map) => {
+                for (key, v) in map {
+                    let next = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    walk(v, next, out);
+                }
+            }
+            Value::Array(arr) => {
+                for (idx, v) in arr.iter().enumerate() {
+                    let next = if path.is_empty() {
+                        format!("[{idx}]")
+                    } else {
+                        format!("{path}[{idx}]")
+                    };
+                    walk(v, next, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(value, String::new(), &mut out);
+    out
+}
+
 pub fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -425,8 +511,64 @@ pub fn run_app<B: Backend>(
                                 app.previous();
                                 continue;
                             }
+                            KeyCode::Char('t') => {
+                                app.enter_field_view();
+                                continue;
+                            }
                             _ => {}
                         }
+                    }
+                    if matches!(app.input_mode, InputMode::FieldView) {
+                        if key.code == KeyCode::Esc
+                            || (key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL))
+                        {
+                            app.exit_field_view();
+                            continue;
+                        }
+                        if let Some(fv) = app.field_view.as_mut() {
+                            match key.code {
+                                KeyCode::Char('q') => app.exit_field_view(),
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    let len = fv.fields.len();
+                                    let next = fv
+                                        .list_state
+                                        .selected()
+                                        .map(|i| (i + 1).min(len.saturating_sub(1)))
+                                        .or(Some(0));
+                                    fv.list_state.select(next);
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    let prev = fv
+                                        .list_state
+                                        .selected()
+                                        .map(|i| i.saturating_sub(1))
+                                        .or(Some(0));
+                                    fv.list_state.select(prev);
+                                }
+                                KeyCode::Char('g') => fv.list_state.select(Some(0)),
+                                KeyCode::Char('G') => {
+                                    if !fv.fields.is_empty() {
+                                        fv.list_state
+                                            .select(Some(fv.fields.len().saturating_sub(1)));
+                                    }
+                                }
+                                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let half = (app.last_field_detail_height.max(1) / 2).max(1);
+                                    let max_offset = app
+                                        .field_detail_total_lines
+                                        .saturating_sub(app.last_field_detail_height.max(1));
+                                    let new = (app.field_detail_scroll as usize + half).min(max_offset);
+                                    app.field_detail_scroll = new as u16;
+                                }
+                                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                    let half = (app.last_field_detail_height.max(1) / 2).max(1);
+                                    app.field_detail_scroll =
+                                        app.field_detail_scroll.saturating_sub(half as u16);
+                                }
+                                _ => {}
+                            }
+                        }
+                        continue;
                     }
                     if matches!(app.input_mode, InputMode::FilterInput) {
                         match key.code {

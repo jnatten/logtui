@@ -6,11 +6,16 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
-    app::{App, Focus, InputMode},
+    app::{App, ColumnDef, FieldEntry, Focus, InputMode},
     model::LogEntry,
 };
 
 pub fn render(f: &mut Frame, app: &mut App) {
+    if matches!(app.input_mode, InputMode::FieldView) {
+        render_field_view(f, app);
+        return;
+    }
+
     let full_area = f.size();
     f.render_widget(Clear, full_area);
 
@@ -53,8 +58,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let list_width = chunks[0].width.saturating_sub(2) as usize;
     app.last_list_width = list_width;
     app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
-    let enabled_columns: Vec<&crate::app::ColumnDef> =
-        app.columns.iter().filter(|c| c.enabled).collect();
+    let enabled_columns: Vec<&ColumnDef> = app.columns.iter().filter(|c| c.enabled).collect();
     let mut max_full_width = 0usize;
     let items: Vec<ListItem> = app
         .filtered_indices
@@ -134,6 +138,68 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 }
 
+fn render_field_view(f: &mut Frame, app: &mut App) {
+    let area = f.size();
+    f.render_widget(Clear, area);
+    let Some(field_view) = app.field_view.as_mut() else {
+        let block = Block::default().title("Fields").borders(Borders::ALL);
+        let empty = Paragraph::new("No fields to display").block(block);
+        f.render_widget(empty, area);
+        return;
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    let items: Vec<ListItem> = field_view
+        .fields
+        .iter()
+        .map(|field| ListItem::new(field.path.clone()))
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title("Fields (Ctrl+T or Esc to close)")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("▸ ");
+
+    f.render_stateful_widget(list, chunks[0], &mut field_view.list_state);
+
+    let selected = field_view
+        .list_state
+        .selected()
+        .and_then(|i| field_view.fields.get(i));
+    let detail_text = match selected {
+        Some(entry) => field_value_text(entry),
+        None => Text::from("Select a field"),
+    };
+
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    app.last_field_detail_height = chunks[1].height.saturating_sub(2) as usize;
+    app.field_detail_total_lines = wrapped_height(&detail_text, inner_width);
+    let max_offset = app
+        .field_detail_total_lines
+        .saturating_sub(app.last_field_detail_height.max(1));
+    if app.field_detail_scroll as usize > max_offset {
+        app.field_detail_scroll = max_offset as u16;
+    }
+
+    let title = selected
+        .map(|s| format!("Field: {}", s.path))
+        .unwrap_or_else(|| "Field".to_string());
+    let detail_block = Block::default().title(title).borders(Borders::ALL);
+    let detail = Paragraph::new(detail_text)
+        .block(detail_block)
+        .wrap(Wrap { trim: false })
+        .scroll((app.field_detail_scroll, 0));
+    f.render_widget(detail, chunks[1]);
+}
+
 fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
     let Some(entry) = entry else {
         return Text::from("Waiting for logs...");
@@ -147,6 +213,22 @@ fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
     lines.push(Line::from(format!("message: {}", entry.message)));
     lines.push(Line::from(""));
     render_value(&entry.raw, 0, false, &mut lines);
+    Text::from(lines)
+}
+
+fn field_value_text(entry: &FieldEntry) -> Text<'static> {
+    match &entry.value {
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => render_json_text(&entry.value),
+        serde_json::Value::String(s) => Text::from(s.clone()),
+        serde_json::Value::Number(n) => Text::from(n.to_string()),
+        serde_json::Value::Bool(b) => Text::from(b.to_string()),
+        serde_json::Value::Null => Text::from("null"),
+    }
+}
+
+fn render_json_text(value: &serde_json::Value) -> Text<'static> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    render_value(value, 0, false, &mut lines);
     Text::from(lines)
 }
 
@@ -168,7 +250,7 @@ fn level_span(level: &str) -> Span<'static> {
     Span::styled(level.to_ascii_uppercase(), level_style(level))
 }
 
-fn render_row(entry: &LogEntry, cols: &[&crate::app::ColumnDef]) -> String {
+fn render_row(entry: &LogEntry, cols: &[&ColumnDef]) -> String {
     if cols.is_empty() {
         return "[no columns selected]".to_string();
     }
@@ -502,6 +584,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Global",
             keys: "Ctrl+L",
             description: "Force redraw",
+        },
+        Shortcut {
+            context: "Global",
+            keys: "Ctrl+T",
+            description: "Open field viewer",
         },
         Shortcut {
             context: "Global",
