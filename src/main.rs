@@ -53,6 +53,7 @@ struct App {
     detail_total_lines: usize,
     focus: Focus,
     show_help: bool,
+    zoom: Option<Focus>,
 }
 
 impl App {
@@ -69,6 +70,7 @@ impl App {
             detail_total_lines: 0,
             focus: Focus::List,
             show_help: false,
+            zoom: None,
         }
     }
 
@@ -270,6 +272,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             KeyCode::Char('k') | KeyCode::Up => app.previous(),
                             KeyCode::Char('h') => app.previous(),
                             KeyCode::Char('l') => app.next(),
+                            KeyCode::Char('z') => {
+                                app.zoom = match app.zoom {
+                                    Some(Focus::List) => None,
+                                    _ => Some(Focus::List),
+                                }
+                            }
                             KeyCode::Char('e') => {
                                 if let Some(entry) = app.current_entry() {
                                     open_entry_in_editor(terminal, &entry)?;
@@ -294,6 +302,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, rx: mpsc::Rece
                             }
                             KeyCode::Char('k') | KeyCode::Up | KeyCode::Char('h') => {
                                 app.detail_up(1)
+                            }
+                            KeyCode::Char('z') => {
+                                app.zoom = match app.zoom {
+                                    Some(Focus::Detail) => None,
+                                    _ => Some(Focus::Detail),
+                                }
                             }
                             KeyCode::Char('e') => {
                                 if let Some(entry) = app.current_entry() {
@@ -330,10 +344,15 @@ fn ui(f: &mut Frame, app: &mut App) {
     let area = f.size();
     // Clear the full frame to avoid stray output from other streams (e.g., piped command stderr).
     f.render_widget(Clear, area);
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(area);
+    let chunks = match app.zoom {
+        Some(Focus::List) => vec![area, Rect::new(0, 0, 0, 0)],
+        Some(Focus::Detail) => vec![Rect::new(0, 0, 0, 0), area],
+        None => Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(area)
+            .to_vec(),
+    };
 
     app.last_list_height = chunks[0].height.saturating_sub(2) as usize;
     app.last_detail_height = chunks[1].height.saturating_sub(2) as usize;
@@ -367,34 +386,36 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     f.render_stateful_widget(list, chunks[0], &mut app.list_state);
 
-    let selected_entry = app
-        .list_state
-        .selected()
-        .and_then(|i| app.entries.get(i))
-        .cloned();
-    let detail_text = selected_details(selected_entry);
-    let inner_width = chunks[1].width.saturating_sub(2) as usize;
-    app.detail_total_lines = wrapped_height(&detail_text, inner_width);
-    let max_offset = app
-        .detail_total_lines
-        .saturating_sub(app.last_detail_height.max(1));
-    if app.detail_scroll as usize > max_offset {
-        app.detail_scroll = max_offset as u16;
+    if chunks[1].width > 0 && chunks[1].height > 0 {
+        let selected_entry = app
+            .list_state
+            .selected()
+            .and_then(|i| app.entries.get(i))
+            .cloned();
+        let detail_text = selected_details(selected_entry);
+        let inner_width = chunks[1].width.saturating_sub(2) as usize;
+        app.detail_total_lines = wrapped_height(&detail_text, inner_width);
+        let max_offset = app
+            .detail_total_lines
+            .saturating_sub(app.last_detail_height.max(1));
+        if app.detail_scroll as usize > max_offset {
+            app.detail_scroll = max_offset as u16;
+        }
+
+        let detail_block = Block::default()
+            .title("Details")
+            .borders(Borders::ALL)
+            .border_style(match app.focus {
+                Focus::Detail => Style::default().fg(Color::Cyan),
+                Focus::List => Style::default(),
+            });
+
+        let detail = Paragraph::new(detail_text)
+            .block(detail_block)
+            .wrap(Wrap { trim: false })
+            .scroll((app.detail_scroll, 0));
+        f.render_widget(detail, chunks[1]);
     }
-
-    let detail_block = Block::default()
-        .title("Details")
-        .borders(Borders::ALL)
-        .border_style(match app.focus {
-            Focus::Detail => Style::default().fg(Color::Cyan),
-            Focus::List => Style::default(),
-        });
-
-    let detail = Paragraph::new(detail_text)
-        .block(detail_block)
-        .wrap(Wrap { trim: false })
-        .scroll((app.detail_scroll, 0));
-    f.render_widget(detail, chunks[1]);
 
     if app.show_help {
         render_help(f, area);
@@ -521,6 +542,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "List",
+            keys: "z",
+            description: "Toggle zoom (list)",
+        },
+        Shortcut {
+            context: "List",
             keys: "e",
             description: "Open entry in $EDITOR",
         },
@@ -538,6 +564,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Detail",
             keys: "g / G",
             description: "Jump to top/bottom",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "z",
+            description: "Toggle zoom (details)",
         },
         Shortcut {
             context: "Detail",
