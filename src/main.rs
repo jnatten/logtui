@@ -18,6 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde_json::{json, Value};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Interactive TUI log viewer")]
@@ -327,7 +328,8 @@ fn ui(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(list, chunks[0], &mut app.list_state);
 
     let detail_text = selected_details(app);
-    app.detail_total_lines = detail_text.lines().count();
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    app.detail_total_lines = wrapped_height(&detail_text, inner_width);
     let max_offset = app
         .detail_total_lines
         .saturating_sub(app.last_detail_height.max(1));
@@ -376,6 +378,21 @@ fn level_style(level: &str) -> Style {
         "TRACE" => Style::default().fg(Color::Gray),
         "PARSE" => Style::default().fg(Color::Magenta),
         _ => Style::default(),
+    }
+}
+
+fn wrapped_height(text: &str, width: usize) -> usize {
+    let effective_width = width.max(1);
+    let mut total = 0usize;
+    for line in text.lines() {
+        let line_width = UnicodeWidthStr::width(line);
+        let wrapped = if line_width == 0 { 1 } else { (line_width + effective_width - 1) / effective_width };
+        total += wrapped.max(1);
+    }
+    if text.is_empty() {
+        0
+    } else {
+        total
     }
 }
 
