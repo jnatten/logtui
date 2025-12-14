@@ -59,8 +59,11 @@ pub struct App {
     pub last_list_height: usize,
     pub last_list_width: usize,
     pub last_detail_height: usize,
+    pub last_detail_width: usize,
     pub detail_scroll: u16,
     pub detail_total_lines: usize,
+    pub detail_horiz_offset: usize,
+    pub detail_max_line_width: usize,
     pub focus: Focus,
     pub show_help: bool,
     pub zoom: Option<Focus>,
@@ -77,6 +80,11 @@ pub struct App {
     pub field_detail_total_lines: usize,
     pub last_field_detail_height: usize,
     pub last_field_list_height: usize,
+    pub last_field_detail_width: usize,
+    pub field_detail_horiz_offset: usize,
+    pub field_detail_max_line_width: usize,
+    pub detail_wrap: bool,
+    pub field_detail_wrap: bool,
     pub field_zoom: Option<FieldZoom>,
 }
 
@@ -96,8 +104,11 @@ impl App {
             last_list_height: 0,
             last_list_width: 0,
             last_detail_height: 0,
+            last_detail_width: 0,
             detail_scroll: 0,
             detail_total_lines: 0,
+            detail_horiz_offset: 0,
+            detail_max_line_width: 0,
             focus: Focus::List,
             show_help: false,
             zoom: None,
@@ -114,6 +125,11 @@ impl App {
             field_detail_total_lines: 0,
             last_field_detail_height: 0,
             last_field_list_height: 0,
+            last_field_detail_width: 0,
+            field_detail_horiz_offset: 0,
+            field_detail_max_line_width: 0,
+            detail_wrap: true,
+            field_detail_wrap: true,
             field_zoom: None,
         }
     }
@@ -142,7 +158,7 @@ impl App {
         let i = self.list_state.selected().unwrap_or(0);
         let next = (i + 1).min(self.filtered_indices.len() - 1);
         self.list_state.select(Some(next));
-        self.detail_scroll = 0;
+        self.reset_detail_position();
         self.force_redraw = true;
     }
 
@@ -153,7 +169,7 @@ impl App {
         let i = self.list_state.selected().unwrap_or(0);
         let prev = i.saturating_sub(1);
         self.list_state.select(Some(prev));
-        self.detail_scroll = 0;
+        self.reset_detail_position();
         self.force_redraw = true;
     }
 
@@ -165,7 +181,7 @@ impl App {
         let i = self.list_state.selected().unwrap_or(0);
         let next = (i + half).min(self.filtered_indices.len() - 1);
         self.list_state.select(Some(next));
-        self.detail_scroll = 0;
+        self.reset_detail_position();
         self.force_redraw = true;
     }
 
@@ -177,7 +193,7 @@ impl App {
         let i = self.list_state.selected().unwrap_or(0);
         let prev = i.saturating_sub(half);
         self.list_state.select(Some(prev));
-        self.detail_scroll = 0;
+        self.reset_detail_position();
         self.force_redraw = true;
     }
 
@@ -188,7 +204,7 @@ impl App {
             self.list_state
                 .select(Some(self.filtered_indices.len() - 1));
         }
-        self.detail_scroll = 0;
+        self.reset_detail_position();
         self.force_redraw = true;
     }
 
@@ -198,7 +214,7 @@ impl App {
         } else {
             self.list_state.select(Some(0));
         }
-        self.detail_scroll = 0;
+        self.reset_detail_position();
         self.force_redraw = true;
     }
 
@@ -226,6 +242,7 @@ impl App {
 
     pub fn detail_top(&mut self) {
         self.detail_scroll = 0;
+        self.detail_horiz_offset = 0;
     }
 
     pub fn detail_bottom(&mut self) {
@@ -237,6 +254,38 @@ impl App {
             .detail_total_lines
             .saturating_sub(self.last_detail_height.max(1));
         self.detail_scroll = max_offset as u16;
+    }
+
+    fn reset_detail_position(&mut self) {
+        self.detail_scroll = 0;
+        self.detail_horiz_offset = 0;
+    }
+
+    fn reset_field_detail_position(&mut self) {
+        self.field_detail_scroll = 0;
+        self.field_detail_horiz_offset = 0;
+    }
+
+    pub fn clamp_detail_horiz_offset(&mut self) {
+        if self.detail_wrap {
+            self.detail_horiz_offset = 0;
+            return;
+        }
+        let max_off = self
+            .detail_max_line_width
+            .saturating_sub(self.last_detail_width.max(1));
+        self.detail_horiz_offset = self.detail_horiz_offset.min(max_off);
+    }
+
+    pub fn clamp_field_detail_horiz_offset(&mut self) {
+        if self.field_detail_wrap {
+            self.field_detail_horiz_offset = 0;
+            return;
+        }
+        let max_off = self
+            .field_detail_max_line_width
+            .saturating_sub(self.last_field_detail_width.max(1));
+        self.field_detail_horiz_offset = self.field_detail_horiz_offset.min(max_off);
     }
 
     pub fn clamp_offset(&mut self) {
@@ -303,9 +352,11 @@ impl App {
             list_state,
             filter: String::new(),
         });
-        self.field_detail_scroll = 0;
+        self.reset_field_detail_position();
         self.field_detail_total_lines = 0;
         self.last_field_detail_height = 0;
+        self.last_field_detail_width = 0;
+        self.field_detail_max_line_width = 0;
         self.field_zoom = None;
         self.input_mode = InputMode::FieldView;
         self.force_redraw = true;
@@ -313,9 +364,11 @@ impl App {
 
     pub fn exit_field_view(&mut self) {
         self.field_view = None;
-        self.field_detail_scroll = 0;
+        self.reset_field_detail_position();
         self.field_detail_total_lines = 0;
         self.last_field_detail_height = 0;
+        self.last_field_detail_width = 0;
+        self.field_detail_max_line_width = 0;
         self.field_zoom = None;
         self.input_mode = InputMode::Normal;
     }
@@ -350,7 +403,7 @@ impl App {
 
         if self.filtered_indices.is_empty() {
             self.list_state.select(None);
-            self.detail_scroll = 0;
+            self.reset_detail_position();
             return;
         }
 
@@ -358,7 +411,7 @@ impl App {
             SelectStrategy::Last => {
                 self.list_state
                     .select(Some(self.filtered_indices.len().saturating_sub(1)));
-                self.detail_scroll = 0;
+                self.reset_detail_position();
                 self.horiz_offset = 0;
             }
             SelectStrategy::PreserveOrFirst => {
@@ -369,13 +422,13 @@ impl App {
                         .position(|&idx| idx == prev_entry_idx)
                     {
                         self.list_state.select(Some(new_pos));
-                        self.detail_scroll = 0;
+                        self.reset_detail_position();
                         self.horiz_offset = 0;
                         return;
                     }
                 }
                 self.list_state.select(Some(0));
-                self.detail_scroll = 0;
+                self.reset_detail_position();
                 self.horiz_offset = 0;
             }
         }
@@ -555,7 +608,7 @@ fn move_field_selection(app: &mut App, delta: isize) {
         return;
     }
     fv.list_state.select(Some(new_idx));
-    app.field_detail_scroll = 0;
+    app.reset_field_detail_position();
     app.force_redraw = true;
 }
 
@@ -705,12 +758,33 @@ pub fn run_app<B: Backend>(
                         }
                         if let Some(fv) = app.field_view.as_mut() {
                             match key.code {
+                                KeyCode::Char('w') => {
+                                    app.field_detail_wrap = !app.field_detail_wrap;
+                                    app.reset_field_detail_position();
+                                    app.force_redraw = true;
+                                }
+                                KeyCode::Char('h') => {
+                                    if !app.field_detail_wrap {
+                                        let step = (app.last_field_detail_width / 4).max(4);
+                                        app.field_detail_horiz_offset =
+                                            app.field_detail_horiz_offset.saturating_sub(step);
+                                        app.clamp_field_detail_horiz_offset();
+                                    }
+                                }
+                                KeyCode::Char('l') => {
+                                    if !app.field_detail_wrap {
+                                        let step = (app.last_field_detail_width / 4).max(4);
+                                        app.field_detail_horiz_offset =
+                                            app.field_detail_horiz_offset.saturating_add(step);
+                                        app.clamp_field_detail_horiz_offset();
+                                    }
+                                }
                                 KeyCode::Backspace => {
                                     if !fv.filter.is_empty() {
                                         fv.filter.pop();
                                         let changed = fv.rebuild_filter();
                                         if changed {
-                                            app.field_detail_scroll = 0;
+                                            app.reset_field_detail_position();
                                             app.force_redraw = true;
                                         }
                                     }
@@ -722,7 +796,7 @@ pub fn run_app<B: Backend>(
                                         fv.filter.clear();
                                         let changed = fv.rebuild_filter();
                                         if changed {
-                                            app.field_detail_scroll = 0;
+                                            app.reset_field_detail_position();
                                             app.force_redraw = true;
                                         }
                                     }
@@ -733,7 +807,7 @@ pub fn run_app<B: Backend>(
                                     fv.filter.push(c);
                                     let changed = fv.rebuild_filter();
                                     if changed {
-                                        app.field_detail_scroll = 0;
+                                        app.reset_field_detail_position();
                                         app.force_redraw = true;
                                     }
                                 }
@@ -915,6 +989,11 @@ pub fn run_app<B: Backend>(
                                     _ => Some(Focus::List),
                                 }
                             }
+                            KeyCode::Char('w') => {
+                                app.detail_wrap = !app.detail_wrap;
+                                app.reset_detail_position();
+                                app.force_redraw = true;
+                            }
                             KeyCode::Char('g') => app.select_first(),
                             KeyCode::Char('G') => app.select_last(),
                             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -932,8 +1011,18 @@ pub fn run_app<B: Backend>(
                             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 app.force_redraw = true;
                             }
-                            KeyCode::Char('h') => app.detail_up(1),
-                            KeyCode::Char('l') => app.detail_down(1),
+                            KeyCode::Char('h') => {
+                                let step = (app.last_detail_width / 4).max(4);
+                                app.detail_horiz_offset =
+                                    app.detail_horiz_offset.saturating_sub(step);
+                                app.clamp_detail_horiz_offset();
+                            }
+                            KeyCode::Char('l') => {
+                                let step = (app.last_detail_width / 4).max(4);
+                                app.detail_horiz_offset =
+                                    app.detail_horiz_offset.saturating_add(step);
+                                app.clamp_detail_horiz_offset();
+                            }
                             KeyCode::Char('c') => {
                                 app.input_mode = InputMode::ColumnSelect;
                                 if app.column_select_state.selected().is_none()
@@ -962,6 +1051,11 @@ pub fn run_app<B: Backend>(
                             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 let half = (app.last_detail_height.max(1) / 2).max(1);
                                 app.detail_up(half);
+                            }
+                            KeyCode::Char('w') => {
+                                app.detail_wrap = !app.detail_wrap;
+                                app.reset_detail_position();
+                                app.force_redraw = true;
                             }
                             KeyCode::Char('g') => app.detail_top(),
                             KeyCode::Char('G') => app.detail_bottom(),

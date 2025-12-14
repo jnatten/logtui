@@ -101,8 +101,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .and_then(|i| app.filtered_indices.get(i))
             .and_then(|&idx| app.entries.get(idx))
             .cloned();
+        let detail_title = if app.detail_wrap {
+            "Details".to_string()
+        } else {
+            "Details (wrap off)".to_string()
+        };
         let detail_block = Block::default()
-            .title("Details")
+            .title(detail_title)
             .borders(Borders::ALL)
             .padding(Padding::uniform(1))
             .border_style(match app.focus {
@@ -112,22 +117,38 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
         let inner = detail_block.inner(chunks[1]);
         app.last_detail_height = inner.height as usize;
+        app.last_detail_width = inner.width as usize;
 
         let detail_text = selected_details(selected_entry);
         let inner_width = inner.width as usize;
-        app.detail_total_lines = wrapped_height(&detail_text, inner_width);
+        app.detail_max_line_width = text_max_width(&detail_text);
+        app.detail_total_lines = if app.detail_wrap {
+            wrapped_height(&detail_text, inner_width)
+        } else {
+            plain_height(&detail_text)
+        };
         let max_offset = app
             .detail_total_lines
             .saturating_sub(app.last_detail_height.max(1));
         if app.detail_scroll as usize > max_offset {
             app.detail_scroll = max_offset as u16;
         }
+        app.clamp_detail_horiz_offset();
 
-        let detail = Paragraph::new(detail_text)
+        let mut detail = Paragraph::new(detail_text)
             .block(detail_block)
-            .wrap(Wrap { trim: false })
-            .scroll((app.detail_scroll, 0));
+            .scroll((app.detail_scroll, app.detail_horiz_offset as u16));
+        if app.detail_wrap {
+            detail = detail.wrap(Wrap { trim: false });
+        }
         f.render_widget(detail, chunks[1]);
+    } else {
+        app.last_detail_height = 0;
+        app.last_detail_width = 0;
+        app.detail_total_lines = 0;
+        app.detail_scroll = 0;
+        app.detail_horiz_offset = 0;
+        app.detail_max_line_width = 0;
     }
 
     if app.show_help {
@@ -190,9 +211,12 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
             None => Text::from("Select a field"),
         };
 
-        let title = selected
+        let mut title = selected
             .map(|s| format!("Field: {}", s.path))
             .unwrap_or_else(|| "Field".to_string());
+        if !app.field_detail_wrap {
+            title.push_str(" (wrap off)");
+        }
         let detail_block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -200,25 +224,38 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
 
         let inner = detail_block.inner(chunks[1]);
         app.last_field_detail_height = inner.height as usize;
+        app.last_field_detail_width = inner.width as usize;
 
         let inner_width = inner.width as usize;
-        app.field_detail_total_lines = wrapped_height(&detail_text, inner_width);
+        app.field_detail_max_line_width = text_max_width(&detail_text);
+        app.field_detail_total_lines = if app.field_detail_wrap {
+            wrapped_height(&detail_text, inner_width)
+        } else {
+            plain_height(&detail_text)
+        };
         let max_offset = app
             .field_detail_total_lines
             .saturating_sub(app.last_field_detail_height.max(1));
         if app.field_detail_scroll as usize > max_offset {
             app.field_detail_scroll = max_offset as u16;
         }
+        app.clamp_field_detail_horiz_offset();
 
-        let detail = Paragraph::new(detail_text)
-            .block(detail_block)
-            .wrap(Wrap { trim: false })
-            .scroll((app.field_detail_scroll, 0));
+        let mut detail = Paragraph::new(detail_text).block(detail_block).scroll((
+            app.field_detail_scroll,
+            app.field_detail_horiz_offset as u16,
+        ));
+        if app.field_detail_wrap {
+            detail = detail.wrap(Wrap { trim: false });
+        }
         f.render_widget(detail, chunks[1]);
     } else {
         app.last_field_detail_height = 0;
         app.field_detail_total_lines = 0;
         app.field_detail_scroll = 0;
+        app.last_field_detail_width = 0;
+        app.field_detail_horiz_offset = 0;
+        app.field_detail_max_line_width = 0;
     }
 }
 
@@ -582,6 +619,23 @@ fn render_primitive_spans(value: &serde_json::Value) -> Vec<Span<'static>> {
     }
 }
 
+fn plain_height(text: &Text<'_>) -> usize {
+    text.lines.len()
+}
+
+fn text_max_width(text: &Text<'_>) -> usize {
+    text.lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 fn wrapped_height(text: &Text<'_>, width: usize) -> usize {
     let effective_width = width.max(1);
     let mut total = 0usize;
@@ -692,8 +746,8 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Detail",
-            keys: "j/k, Up/Down, h/l",
-            description: "Scroll details",
+            keys: "j/k, Up/Down",
+            description: "Scroll details vertically",
         },
         Shortcut {
             context: "Detail",
@@ -704,6 +758,16 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Detail",
             keys: "g / G",
             description: "Jump to top/bottom",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "h / l (wrap off)",
+            description: "Pan horizontally",
+        },
+        Shortcut {
+            context: "Detail",
+            keys: "w",
+            description: "Toggle wrap (details)",
         },
         Shortcut {
             context: "Detail",
@@ -729,6 +793,16 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Field viewer",
             keys: "Ctrl+d / Ctrl+u",
             description: "Half-page down/up (list) or scroll detail when zoomed",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "h / l (wrap off)",
+            description: "Pan field detail horizontally",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "w",
+            description: "Toggle wrap (field detail)",
         },
         Shortcut {
             context: "Field viewer",
