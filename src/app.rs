@@ -306,6 +306,7 @@ impl App {
         self.last_field_detail_height = 0;
         self.field_zoom = None;
         self.input_mode = InputMode::FieldView;
+        self.force_redraw = true;
     }
 
     pub fn exit_field_view(&mut self) {
@@ -665,6 +666,7 @@ pub fn run_app<B: Backend>(
                                         let changed = fv.rebuild_filter();
                                         if changed {
                                             app.field_detail_scroll = 0;
+                                            app.force_redraw = true;
                                         }
                                     }
                                 }
@@ -676,6 +678,7 @@ pub fn run_app<B: Backend>(
                                         let changed = fv.rebuild_filter();
                                         if changed {
                                             app.field_detail_scroll = 0;
+                                            app.force_redraw = true;
                                         }
                                     }
                                 }
@@ -686,6 +689,7 @@ pub fn run_app<B: Backend>(
                                     let changed = fv.rebuild_filter();
                                     if changed {
                                         app.field_detail_scroll = 0;
+                                        app.force_redraw = true;
                                     }
                                 }
                                 KeyCode::Down => {
@@ -700,6 +704,7 @@ pub fn run_app<B: Backend>(
                                         .or(Some(0));
                                     fv.list_state.select(next);
                                     app.field_detail_scroll = 0;
+                                    app.force_redraw = true;
                                 }
                                 KeyCode::Up => {
                                     if fv.filtered_indices.is_empty() {
@@ -712,6 +717,7 @@ pub fn run_app<B: Backend>(
                                         .or(Some(0));
                                     fv.list_state.select(prev);
                                     app.field_detail_scroll = 0;
+                                    app.force_redraw = true;
                                 }
                                 KeyCode::Char('d')
                                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
