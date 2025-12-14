@@ -43,10 +43,12 @@ kubectl logs mypod | logtui
 ### Detail pane
 
 - Scroll: `j/k`, `Up/Down`
+- Horizontal scroll (wrap off): `h / l`; jump: `0` (start), `$` (end)
 - Half page: `Ctrl+d / Ctrl+u`
 - Jump: `g` / `G`
 - Back to list: `Tab`, `Left`, `Esc`
 - Column selector: `c`
+- Toggle wrap: `w`
 
 ### Column selector (after `c`)
 
@@ -54,6 +56,16 @@ kubectl logs mypod | logtui
 - Toggle column: `Space` or `Enter`
 - Reorder: `J` (down), `K` (up)
 - Close: `Esc`
+
+### Field viewer (after `Ctrl+T`)
+
+- Filter fields: type to filter, `Backspace` to delete, `Ctrl+u` to clear
+- Move: `j/k`, `Up/Down`; half page: `Ctrl+d / Ctrl+u`
+- Horizontal scroll (wrap off): `h / l`; jump: `0` (start), `$` (end)
+- Open in filter: `/` (prefills main `/` filter and returns)
+- Toggle wrap: `w`
+- Open selected in `$EDITOR`: `Ctrl+E`
+- Close: `Esc`, `Ctrl+T`
 
 ## 🧠 Behavior notes
 
