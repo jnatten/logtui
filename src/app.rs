@@ -2,8 +2,8 @@ use std::{sync::mpsc, time::Duration};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::{backend::Backend, Terminal, widgets::ListState};
-use regex::Regex;
+use ratatui::{Terminal, backend::Backend, widgets::ListState};
+use regex::{Regex, escape};
 use serde_json::Value;
 
 use crate::{
@@ -183,7 +183,8 @@ impl App {
         if self.filtered_indices.is_empty() {
             self.list_state.select(None);
         } else {
-            self.list_state.select(Some(self.filtered_indices.len() - 1));
+            self.list_state
+                .select(Some(self.filtered_indices.len() - 1));
         }
         self.detail_scroll = 0;
         self.force_redraw = true;
@@ -320,10 +321,7 @@ impl App {
         if let Some(re) = &self.filter_regex {
             let hay = format!(
                 "{} {} {} {}",
-                entry.timestamp,
-                entry.level,
-                entry.message,
-                entry.raw
+                entry.timestamp, entry.level, entry.message, entry.raw
             );
             re.is_match(&hay)
         } else {
@@ -460,6 +458,12 @@ pub struct FieldViewState {
 }
 
 impl FieldViewState {
+    fn selected_field(&self) -> Option<&FieldEntry> {
+        let idx = self.list_state.selected()?;
+        let field_idx = *self.filtered_indices.get(idx)?;
+        self.fields.get(field_idx)
+    }
+
     fn rebuild_filter(&mut self) -> bool {
         let old_selection = self.list_state.selected();
         let filter = self.filter.to_lowercase();
@@ -527,6 +531,25 @@ fn collect_fields(value: &Value) -> Vec<FieldEntry> {
     out
 }
 
+fn field_value_for_filter(entry: &FieldEntry) -> String {
+    match &entry.value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn move_field_value_to_filter(app: &mut App, entry: &FieldEntry) {
+    let literal = escape(&field_value_for_filter(entry));
+    app.exit_field_view();
+    app.focus = Focus::List;
+    app.filter_buffer = literal;
+    app.filter_error = None;
+    app.input_mode = InputMode::FilterInput;
+}
+
 fn cycle_field_zoom(app: &mut App) {
     app.field_zoom = match app.field_zoom {
         None => Some(FieldZoom::Detail),
@@ -549,12 +572,17 @@ pub fn run_app<B: Backend>(
             app.force_redraw = false;
         }
 
-        terminal.draw(|f| ui::render(f, app)).context("drawing frame")?;
+        terminal
+            .draw(|f| ui::render(f, app))
+            .context("drawing frame")?;
 
         if event::poll(Duration::from_millis(100)).context("polling for events")? {
             match event::read().context("reading event")? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)) {
+                    if key.code == KeyCode::Char('q')
+                        || (key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
+                    {
                         break;
                     }
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -584,15 +612,10 @@ pub fn run_app<B: Backend>(
                             }
                             KeyCode::Char('e') => {
                                 if matches!(app.input_mode, InputMode::FieldView) {
-                                    if let Some(fv) = app.field_view.as_ref() {
-                                        if let Some(sel) = fv
-                                            .list_state
-                                            .selected()
-                                            .and_then(|i| fv.filtered_indices.get(i))
-                                            .and_then(|&idx| fv.fields.get(idx))
-                                        {
-                                            open_value_in_editor(terminal, &sel.path, &sel.value)?;
-                                        }
+                                    if let Some(sel) =
+                                        app.field_view.as_ref().and_then(|fv| fv.selected_field())
+                                    {
+                                        open_value_in_editor(terminal, &sel.path, &sel.value)?;
                                     }
                                 } else if let Some(entry) = app.current_entry() {
                                     open_entry_in_editor(terminal, &entry)?;
@@ -615,9 +638,23 @@ pub fn run_app<B: Backend>(
                     }
                     if matches!(app.input_mode, InputMode::FieldView) {
                         if key.code == KeyCode::Esc
-                            || (key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL))
+                            || (key.code == KeyCode::Char('t')
+                                && key.modifiers.contains(KeyModifiers::CONTROL))
                         {
                             app.exit_field_view();
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('/')
+                            && !key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            if let Some(selected) = app
+                                .field_view
+                                .as_ref()
+                                .and_then(|fv| fv.selected_field())
+                                .cloned()
+                            {
+                                move_field_value_to_filter(app, &selected);
+                            }
                             continue;
                         }
                         if let Some(fv) = app.field_view.as_mut() {
@@ -631,7 +668,9 @@ pub fn run_app<B: Backend>(
                                         }
                                     }
                                 }
-                                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('u')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     if !fv.filter.is_empty() {
                                         fv.filter.clear();
                                         let changed = fv.rebuild_filter();
@@ -640,7 +679,9 @@ pub fn run_app<B: Backend>(
                                         }
                                     }
                                 }
-                                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char(c)
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     fv.filter.push(c);
                                     let changed = fv.rebuild_filter();
                                     if changed {
@@ -672,15 +713,20 @@ pub fn run_app<B: Backend>(
                                     fv.list_state.select(prev);
                                     app.field_detail_scroll = 0;
                                 }
-                                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('d')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     let half = (app.last_field_detail_height.max(1) / 2).max(1);
                                     let max_offset = app
                                         .field_detail_total_lines
                                         .saturating_sub(app.last_field_detail_height.max(1));
-                                    let new = (app.field_detail_scroll as usize + half).min(max_offset);
+                                    let new =
+                                        (app.field_detail_scroll as usize + half).min(max_offset);
                                     app.field_detail_scroll = new as u16;
                                 }
-                                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                KeyCode::Char('u')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
                                     let half = (app.last_field_detail_height.max(1) / 2).max(1);
                                     app.field_detail_scroll =
                                         app.field_detail_scroll.saturating_sub(half as u16);
@@ -799,9 +845,8 @@ pub fn run_app<B: Backend>(
                             }
                             KeyCode::Char('$') => {
                                 if app.max_row_width > app.last_list_width {
-                                    app.horiz_offset = app
-                                        .max_row_width
-                                        .saturating_sub(app.last_list_width);
+                                    app.horiz_offset =
+                                        app.max_row_width.saturating_sub(app.last_list_width);
                                 } else {
                                     app.horiz_offset = 0;
                                 }
@@ -809,7 +854,9 @@ pub fn run_app<B: Backend>(
                             }
                             KeyCode::Char('c') => {
                                 app.input_mode = InputMode::ColumnSelect;
-                                if app.column_select_state.selected().is_none() && !app.columns.is_empty() {
+                                if app.column_select_state.selected().is_none()
+                                    && !app.columns.is_empty()
+                                {
                                     app.column_select_state.select(Some(0));
                                 }
                             }
@@ -845,16 +892,14 @@ pub fn run_app<B: Backend>(
                             KeyCode::Char('l') => app.detail_down(1),
                             KeyCode::Char('c') => {
                                 app.input_mode = InputMode::ColumnSelect;
-                                if app.column_select_state.selected().is_none() && !app.columns.is_empty() {
+                                if app.column_select_state.selected().is_none()
+                                    && !app.columns.is_empty()
+                                {
                                     app.column_select_state.select(Some(0));
                                 }
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                app.detail_down(1)
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                app.detail_up(1)
-                            }
+                            KeyCode::Char('j') | KeyCode::Down => app.detail_down(1),
+                            KeyCode::Char('k') | KeyCode::Up => app.detail_up(1),
                             KeyCode::Char('/') => {
                                 app.input_mode = InputMode::FilterInput;
                                 app.filter_buffer = app.filter_query.clone();

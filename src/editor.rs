@@ -3,14 +3,17 @@ use std::{env, fs, process::Command};
 use anyhow::Result;
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::Backend, Terminal};
+use ratatui::{Terminal, backend::Backend};
 
 use crate::model::LogEntry;
 use serde_json::Value;
 
-pub fn open_entry_in_editor<B: Backend>(terminal: &mut Terminal<B>, entry: &LogEntry) -> Result<()> {
+pub fn open_entry_in_editor<B: Backend>(
+    terminal: &mut Terminal<B>,
+    entry: &LogEntry,
+) -> Result<()> {
     let sanitized_ts: String = entry
         .timestamp
         .chars()

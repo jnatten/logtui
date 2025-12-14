@@ -168,7 +168,11 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().title(field_title(field_view)).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(field_title(field_view))
+                .borders(Borders::ALL),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▸ ");
 
@@ -235,7 +239,9 @@ fn selected_details(entry: Option<LogEntry>) -> Text<'static> {
 
 fn field_value_text(entry: &FieldEntry) -> Text<'static> {
     match &entry.value {
-        serde_json::Value::Object(_) | serde_json::Value::Array(_) => render_json_text(&entry.value),
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+            render_json_text(&entry.value)
+        }
         serde_json::Value::String(s) => Text::from(s.clone()),
         serde_json::Value::Number(n) => Text::from(n.to_string()),
         serde_json::Value::Bool(b) => Text::from(b.to_string()),
@@ -251,9 +257,9 @@ fn render_json_text(value: &serde_json::Value) -> Text<'static> {
 
 fn field_title(field_view: &FieldViewState) -> String {
     if field_view.filter.is_empty() {
-        "Fields (Ctrl+T or Esc to close)".to_string()
+        "Fields (/ to log filter, Ctrl+T or Esc to close)".to_string()
     } else {
-        format!("Fields (filter: {})", field_view.filter)
+        format!("Fields (filter: {}; / to log filter)", field_view.filter)
     }
 }
 
@@ -385,14 +391,18 @@ fn render_help(f: &mut Frame, area: Rect) {
     let popup = Rect::new(x, y, width, height);
 
     let block = Block::default().title("Shortcuts").borders(Borders::ALL);
-    let help = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: false });
+    let help = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(Clear, popup);
     f.render_widget(help, popup);
 }
 
 fn render_column_selector(f: &mut Frame, area: Rect, app: &mut App) {
     let width = (area.width.saturating_sub(10)).min(90).max(40);
-    let height = (app.columns.len() as u16 + 4).min(area.height.saturating_sub(2)).max(6);
+    let height = (app.columns.len() as u16 + 4)
+        .min(area.height.saturating_sub(2))
+        .max(6);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let popup = Rect::new(x, y, width, height);
@@ -408,7 +418,11 @@ fn render_column_selector(f: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().title("Columns (space to toggle, Esc to close)").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Columns (space to toggle, Esc to close)")
+                .borders(Borders::ALL),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▸ ");
 
@@ -425,7 +439,10 @@ fn status_lines(app: &App) -> Vec<Line<'static>> {
         return lines;
     }
     if matches!(app.input_mode, InputMode::FilterInput) {
-        lines.push(Line::from(format!("Filter (regex): {}_", app.filter_buffer)));
+        lines.push(Line::from(format!(
+            "Filter (regex): {}_",
+            app.filter_buffer
+        )));
     } else if !app.filter_query.is_empty() {
         lines.push(Line::from(format!(
             "Filter: /{}/ ({})",
@@ -447,7 +464,9 @@ fn status_lines(app: &App) -> Vec<Line<'static>> {
 
 fn render_status(f: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
     let block = Block::default().borders(Borders::ALL);
-    let status = Paragraph::new(Text::from(lines)).block(block).wrap(Wrap { trim: true });
+    let status = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: true });
     f.render_widget(Clear, area);
     f.render_widget(status, area);
 }
@@ -545,9 +564,18 @@ fn render_array(
 
 fn render_primitive_spans(value: &serde_json::Value) -> Vec<Span<'static>> {
     match value {
-        serde_json::Value::String(s) => vec![Span::styled(format!("\"{s}\""), Style::default().fg(Color::Green))],
-        serde_json::Value::Number(num) => vec![Span::styled(num.to_string(), Style::default().fg(Color::Yellow))],
-        serde_json::Value::Bool(b) => vec![Span::styled(b.to_string(), Style::default().fg(Color::Magenta))],
+        serde_json::Value::String(s) => vec![Span::styled(
+            format!("\"{s}\""),
+            Style::default().fg(Color::Green),
+        )],
+        serde_json::Value::Number(num) => vec![Span::styled(
+            num.to_string(),
+            Style::default().fg(Color::Yellow),
+        )],
+        serde_json::Value::Bool(b) => vec![Span::styled(
+            b.to_string(),
+            Style::default().fg(Color::Magenta),
+        )],
         serde_json::Value::Null => vec![Span::styled("null", Style::default().fg(Color::Gray))],
         _ => vec![Span::raw(value.to_string())],
     }
@@ -569,11 +597,7 @@ fn wrapped_height(text: &Text<'_>, width: usize) -> usize {
         };
         total += wrapped.max(1);
     }
-    if text.lines.is_empty() {
-        0
-    } else {
-        total
-    }
+    if text.lines.is_empty() { 0 } else { total }
 }
 
 #[derive(Clone, Copy)]
@@ -699,6 +723,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Field viewer",
             keys: "Ctrl+E",
             description: "Open selected field in $EDITOR",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "/",
+            description: "Close and prefill / filter with selected value",
         },
         Shortcut {
             context: "Global",
