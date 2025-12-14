@@ -779,6 +779,22 @@ pub fn run_app<B: Backend>(
                                         app.clamp_field_detail_horiz_offset();
                                     }
                                 }
+                                KeyCode::Char('0') => {
+                                    if !app.field_detail_wrap {
+                                        app.field_detail_horiz_offset = 0;
+                                    }
+                                }
+                                KeyCode::Char('$') => {
+                                    if !app.field_detail_wrap
+                                        && app.field_detail_max_line_width
+                                            > app.last_field_detail_width
+                                    {
+                                        app.field_detail_horiz_offset = app
+                                            .field_detail_max_line_width
+                                            .saturating_sub(app.last_field_detail_width);
+                                        app.clamp_field_detail_horiz_offset();
+                                    }
+                                }
                                 KeyCode::Backspace => {
                                     if !fv.filter.is_empty() {
                                         fv.filter.pop();
@@ -1022,6 +1038,19 @@ pub fn run_app<B: Backend>(
                                 app.detail_horiz_offset =
                                     app.detail_horiz_offset.saturating_add(step);
                                 app.clamp_detail_horiz_offset();
+                            }
+                            KeyCode::Char('0') => {
+                                app.detail_horiz_offset = 0;
+                            }
+                            KeyCode::Char('$') => {
+                                if app.detail_max_line_width > app.last_detail_width {
+                                    app.detail_horiz_offset = app
+                                        .detail_max_line_width
+                                        .saturating_sub(app.last_detail_width);
+                                    app.clamp_detail_horiz_offset();
+                                } else {
+                                    app.detail_horiz_offset = 0;
+                                }
                             }
                             KeyCode::Char('c') => {
                                 app.input_mode = InputMode::ColumnSelect;

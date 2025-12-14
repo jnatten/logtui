@@ -766,6 +766,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
         },
         Shortcut {
             context: "Detail",
+            keys: "0 / $ (wrap off)",
+            description: "Jump to start/end horizontally",
+        },
+        Shortcut {
+            context: "Detail",
             keys: "w",
             description: "Toggle wrap (details)",
         },
@@ -798,6 +803,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Field viewer",
             keys: "h / l (wrap off)",
             description: "Pan field detail horizontally",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "0 / $ (wrap off)",
+            description: "Jump to start/end horizontally",
         },
         Shortcut {
             context: "Field viewer",
