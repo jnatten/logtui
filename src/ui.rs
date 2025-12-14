@@ -177,6 +177,7 @@ fn render_field_view(f: &mut Frame, app: &mut App) {
         .highlight_symbol("▸ ");
 
     f.render_stateful_widget(list, chunks[0], &mut field_view.list_state);
+    app.last_field_list_height = chunks[0].height.saturating_sub(2) as usize;
 
     let selected = field_view
         .list_state
@@ -723,6 +724,21 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Field viewer",
             keys: "Ctrl+E",
             description: "Open selected field in $EDITOR",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "Ctrl+d / Ctrl+u",
+            description: "Half-page down/up (list) or scroll detail when zoomed",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "Ctrl+j / Ctrl+n",
+            description: "Next field",
+        },
+        Shortcut {
+            context: "Field viewer",
+            keys: "Ctrl+k / Ctrl+p",
+            description: "Previous field",
         },
         Shortcut {
             context: "Field viewer",

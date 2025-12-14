@@ -76,6 +76,7 @@ pub struct App {
     pub field_detail_scroll: u16,
     pub field_detail_total_lines: usize,
     pub last_field_detail_height: usize,
+    pub last_field_list_height: usize,
     pub field_zoom: Option<FieldZoom>,
 }
 
@@ -112,6 +113,7 @@ impl App {
             field_detail_scroll: 0,
             field_detail_total_lines: 0,
             last_field_detail_height: 0,
+            last_field_list_height: 0,
             field_zoom: None,
         }
     }
@@ -532,6 +534,36 @@ fn collect_fields(value: &Value) -> Vec<FieldEntry> {
     out
 }
 
+fn move_field_selection(app: &mut App, delta: isize) {
+    let Some(fv) = app.field_view.as_mut() else {
+        return;
+    };
+    if fv.filtered_indices.is_empty() {
+        return;
+    }
+    let len = fv.filtered_indices.len();
+    let current_opt = fv.list_state.selected();
+    let current = current_opt.unwrap_or(0).min(len.saturating_sub(1));
+    let new_idx = (current as isize + delta).clamp(0, (len as isize) - 1) as usize;
+    if current_opt.is_none() {
+        fv.list_state.select(Some(new_idx));
+        app.field_detail_scroll = 0;
+        app.force_redraw = true;
+        return;
+    }
+    if new_idx == current {
+        return;
+    }
+    fv.list_state.select(Some(new_idx));
+    app.field_detail_scroll = 0;
+    app.force_redraw = true;
+}
+
+fn move_field_half_page(app: &mut App, delta: isize) {
+    let step = (app.last_field_list_height.max(1) / 2).max(1) as isize;
+    move_field_selection(app, delta * step);
+}
+
 fn field_value_for_filter(entry: &FieldEntry) -> String {
     match &entry.value {
         Value::String(s) => s.clone(),
@@ -587,6 +619,19 @@ pub fn run_app<B: Backend>(
                         break;
                     }
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        if matches!(app.input_mode, InputMode::FieldView) {
+                            match key.code {
+                                KeyCode::Char('j') | KeyCode::Char('n') => {
+                                    move_field_selection(app, 1);
+                                    continue;
+                                }
+                                KeyCode::Char('k') | KeyCode::Char('p') => {
+                                    move_field_selection(app, -1);
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         match key.code {
                             KeyCode::Char('n') => {
                                 app.next();
@@ -696,46 +741,39 @@ pub fn run_app<B: Backend>(
                                     if fv.filtered_indices.is_empty() {
                                         continue;
                                     }
-                                    let len = fv.filtered_indices.len();
-                                    let next = fv
-                                        .list_state
-                                        .selected()
-                                        .map(|i| (i + 1).min(len.saturating_sub(1)))
-                                        .or(Some(0));
-                                    fv.list_state.select(next);
-                                    app.field_detail_scroll = 0;
-                                    app.force_redraw = true;
+                                    move_field_selection(app, 1);
                                 }
                                 KeyCode::Up => {
                                     if fv.filtered_indices.is_empty() {
                                         continue;
                                     }
-                                    let prev = fv
-                                        .list_state
-                                        .selected()
-                                        .map(|i| i.saturating_sub(1))
-                                        .or(Some(0));
-                                    fv.list_state.select(prev);
-                                    app.field_detail_scroll = 0;
-                                    app.force_redraw = true;
+                                    move_field_selection(app, -1);
                                 }
                                 KeyCode::Char('d')
                                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
-                                    let half = (app.last_field_detail_height.max(1) / 2).max(1);
-                                    let max_offset = app
-                                        .field_detail_total_lines
-                                        .saturating_sub(app.last_field_detail_height.max(1));
-                                    let new =
-                                        (app.field_detail_scroll as usize + half).min(max_offset);
-                                    app.field_detail_scroll = new as u16;
+                                    if matches!(app.field_zoom, Some(FieldZoom::Detail)) {
+                                        let half = (app.last_field_detail_height.max(1) / 2).max(1);
+                                        let max_offset = app
+                                            .field_detail_total_lines
+                                            .saturating_sub(app.last_field_detail_height.max(1));
+                                        let new = (app.field_detail_scroll as usize + half)
+                                            .min(max_offset);
+                                        app.field_detail_scroll = new as u16;
+                                    } else {
+                                        move_field_half_page(app, 1);
+                                    }
                                 }
                                 KeyCode::Char('u')
                                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
-                                    let half = (app.last_field_detail_height.max(1) / 2).max(1);
-                                    app.field_detail_scroll =
-                                        app.field_detail_scroll.saturating_sub(half as u16);
+                                    if matches!(app.field_zoom, Some(FieldZoom::Detail)) {
+                                        let half = (app.last_field_detail_height.max(1) / 2).max(1);
+                                        app.field_detail_scroll =
+                                            app.field_detail_scroll.saturating_sub(half as u16);
+                                    } else {
+                                        move_field_half_page(app, -1);
+                                    }
                                 }
                                 _ => {}
                             }
