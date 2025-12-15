@@ -39,6 +39,7 @@ kubectl logs mypod | logtui
 - Horizontal scroll: `h` / `l`; jump: `0` (start), `$` (end)
 - Focus details: `Enter`, `Tab`, `Right`
 - Column selector: `c`
+- Toggle autoscroll: `a`
 
 ### Detail pane
 

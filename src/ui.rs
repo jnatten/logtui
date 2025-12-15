@@ -1,7 +1,7 @@
 use ratatui::{
     prelude::*,
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -21,7 +21,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     let show_status = matches!(app.input_mode, InputMode::FilterInput)
         || app.filter_error.is_some()
-        || !app.filter_query.is_empty();
+        || !app.filter_query.is_empty()
+        || !app.autoscroll;
 
     let status_lines = if show_status {
         Some(status_lines(app))
@@ -59,16 +60,18 @@ pub fn render(f: &mut Frame, app: &mut App) {
     app.last_list_width = list_width;
     let enabled_columns: Vec<&ColumnDef> = app.columns.iter().filter(|c| c.enabled).collect();
     let mut max_full_width = 0usize;
-    let items: Vec<ListItem> = app
-        .filtered_indices
-        .iter()
-        .filter_map(|&idx| app.entries.get(idx))
-        .map(|entry| {
+    let mut rows: Vec<(String, Style)> = Vec::new();
+    for &idx in &app.filtered_indices {
+        if let Some(entry) = app.entries.get(idx) {
             let full = render_row(entry, &enabled_columns);
             max_full_width = max_full_width.max(full.width());
             let view = slice_row(&full, app.horiz_offset, list_width);
-            ListItem::new(view).style(level_style(&entry.level))
-        })
+            rows.push((view, level_style(&entry.level)));
+        }
+    }
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|(text, style)| ListItem::new(text.clone()).style(*style))
         .collect();
     app.max_row_width = max_full_width;
     app.clamp_offset();
@@ -87,13 +90,48 @@ pub fn render(f: &mut Frame, app: &mut App) {
             Focus::Detail => Style::default(),
         });
 
-    let list = List::new(items)
-        .block(list_block)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▸ ");
+    if app.autoscroll {
+        app.list_scroll_offset = app.list_state.offset();
+        let list = List::new(items)
+            .block(list_block)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_symbol("▸ ");
+        f.render_stateful_widget(list, chunks[0], &mut app.list_state);
+        app.list_scroll_offset = app.list_state.offset();
+    } else {
+        let view_height = app.last_list_height.max(1);
+        let max_start = rows
+            .len()
+            .saturating_sub(view_height)
+            .min(app.filtered_indices.len().saturating_sub(1));
+        let start = app.list_scroll_offset.min(max_start);
+        let end = (start + view_height).min(rows.len());
+        let slice = &rows[start..end];
 
-    f.render_stateful_widget(list, chunks[0], &mut app.list_state);
+        let selected_abs = app.list_state.selected();
+        let highlight_style = Style::default().add_modifier(Modifier::REVERSED);
+        let slice_items: Vec<ListItem> = slice
+            .iter()
+            .enumerate()
+            .map(|(i, (text, style))| {
+                let idx = start + i;
+                let prefix = if Some(idx) == selected_abs { "▸ " } else { "  " };
+                let mut line = prefix.to_string();
+                line.push_str(text);
+                let mut item = ListItem::new(line).style(*style);
+                if Some(idx) == selected_abs {
+                    item = item.style(highlight_style);
+                }
+                item
+            })
+            .collect();
 
+        let mut render_state = ListState::default();
+        render_state.select(None); // keep offset fixed; selection handled manually
+        let list = List::new(slice_items).block(list_block);
+        f.render_stateful_widget(list, chunks[0], &mut render_state);
+        app.list_scroll_offset = start;
+    }
     if chunks[1].width > 0 && chunks[1].height > 0 {
         let selected_entry = app
             .list_state
@@ -491,6 +529,11 @@ fn status_lines(app: &App) -> Vec<Line<'static>> {
         lines.push(Line::from("Filter: (none)"));
     }
 
+    let autoscroll_status = if app.autoscroll { "on" } else { "off" };
+    lines.push(Line::from(format!(
+        "Autoscroll: {autoscroll_status} (a to toggle)"
+    )));
+
     if let Some(err) = &app.filter_error {
         lines.push(Line::styled(
             format!("Filter error: {err}"),
@@ -723,6 +766,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "List",
             keys: "Ctrl+d / Ctrl+u",
             description: "Half-page down/up",
+        },
+        Shortcut {
+            context: "List",
+            keys: "a",
+            description: "Toggle autoscroll",
         },
         Shortcut {
             context: "List",

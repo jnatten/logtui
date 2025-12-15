@@ -55,6 +55,7 @@ pub struct App {
     pub columns: Vec<ColumnDef>,
     pub column_select_state: ListState,
     pub list_state: ListState,
+    pub list_scroll_offset: usize,
     pub max_entries: usize,
     pub last_list_height: usize,
     pub last_list_width: usize,
@@ -67,6 +68,7 @@ pub struct App {
     pub focus: Focus,
     pub show_help: bool,
     pub zoom: Option<Focus>,
+    pub autoscroll: bool,
     pub filter_query: String,
     pub filter_regex: Option<Regex>,
     pub filter_error: Option<String>,
@@ -100,6 +102,7 @@ impl App {
             columns: default_columns(),
             column_select_state,
             list_state,
+            list_scroll_offset: 0,
             max_entries,
             last_list_height: 0,
             last_list_width: 0,
@@ -112,6 +115,7 @@ impl App {
             focus: Focus::List,
             show_help: false,
             zoom: None,
+            autoscroll: true,
             filter_query: String::new(),
             filter_regex: None,
             filter_error: None,
@@ -144,11 +148,32 @@ impl App {
                     self.list_state.select(Some(0));
                 }
             }
+            self.filtered_indices = self
+                .filtered_indices
+                .iter()
+                .filter_map(|idx| idx.checked_sub(1))
+                .collect();
+            self.update_list_offset();
         }
         self.discover_columns(&entry.raw);
         self.entries.push(entry);
-        self.rebuild_filtered(Some(SelectStrategy::Last));
-        self.horiz_offset = 0;
+        let new_idx = self.entries.len().saturating_sub(1);
+        if !self.autoscroll {
+            if self.matches_filter(self.entries.last().expect("just pushed entry")) {
+                self.filtered_indices.push(new_idx);
+                if self.list_state.selected().is_none() {
+                    self.list_state
+                        .select(Some(self.filtered_indices.len().saturating_sub(1)));
+                    self.reset_detail_position();
+                    self.horiz_offset = 0;
+                    self.update_list_offset();
+                }
+            }
+        } else {
+            let strategy = SelectStrategy::Last;
+            self.rebuild_filtered(Some(strategy), false);
+            self.horiz_offset = 0;
+        }
     }
 
     pub fn next(&mut self) {
@@ -160,6 +185,7 @@ impl App {
         self.list_state.select(Some(next));
         self.reset_detail_position();
         self.force_redraw = true;
+        self.update_list_offset();
     }
 
     pub fn previous(&mut self) {
@@ -171,6 +197,7 @@ impl App {
         self.list_state.select(Some(prev));
         self.reset_detail_position();
         self.force_redraw = true;
+        self.update_list_offset();
     }
 
     pub fn page_down(&mut self) {
@@ -183,6 +210,7 @@ impl App {
         self.list_state.select(Some(next));
         self.reset_detail_position();
         self.force_redraw = true;
+        self.update_list_offset();
     }
 
     pub fn page_up(&mut self) {
@@ -195,6 +223,7 @@ impl App {
         self.list_state.select(Some(prev));
         self.reset_detail_position();
         self.force_redraw = true;
+        self.update_list_offset();
     }
 
     pub fn select_last(&mut self) {
@@ -206,6 +235,7 @@ impl App {
         }
         self.reset_detail_position();
         self.force_redraw = true;
+        self.update_list_offset();
     }
 
     pub fn select_first(&mut self) {
@@ -216,6 +246,7 @@ impl App {
         }
         self.reset_detail_position();
         self.force_redraw = true;
+        self.update_list_offset();
     }
 
     pub fn current_entry(&self) -> Option<LogEntry> {
@@ -318,7 +349,7 @@ impl App {
             self.filter_query.clear();
             self.filter_regex = None;
             self.filter_error = None;
-            self.rebuild_filtered(Some(SelectStrategy::PreserveOrFirst));
+            self.rebuild_filtered(Some(SelectStrategy::PreserveOrFirst), false);
             return;
         }
 
@@ -327,7 +358,7 @@ impl App {
                 self.filter_query = pattern.to_string();
                 self.filter_regex = Some(re);
                 self.filter_error = None;
-                self.rebuild_filtered(Some(SelectStrategy::PreserveOrFirst));
+                self.rebuild_filtered(Some(SelectStrategy::PreserveOrFirst), false);
             }
             Err(err) => {
                 self.filter_error = Some(err.to_string());
@@ -385,12 +416,46 @@ impl App {
         }
     }
 
-    fn rebuild_filtered(&mut self, strategy: Option<SelectStrategy>) {
-        let prev_selected_entry = self
-            .list_state
-            .selected()
-            .and_then(|idx| self.filtered_indices.get(idx))
-            .copied();
+    pub fn toggle_autoscroll(&mut self) {
+        self.autoscroll = !self.autoscroll;
+        self.force_redraw = true;
+        if self.autoscroll {
+            self.select_last();
+        } else {
+            self.list_scroll_offset = self.list_state.offset();
+            *self.list_state.offset_mut() = self.list_scroll_offset;
+        }
+    }
+
+    fn selected_entry_index(&self) -> Option<usize> {
+        let idx = self.list_state.selected()?;
+        self.filtered_indices.get(idx).copied()
+    }
+
+    fn update_list_offset(&mut self) {
+        if self.autoscroll {
+            self.list_scroll_offset = self.list_state.offset();
+            return;
+        }
+        let Some(selected) = self.list_state.selected() else {
+            self.list_scroll_offset = self.list_state.offset();
+            return;
+        };
+        let height = self.last_list_height.max(1);
+        let offset = self.list_scroll_offset;
+        let new_offset = if selected >= offset + height {
+            selected + 1 - height
+        } else if selected < offset {
+            selected
+        } else {
+            offset
+        };
+        self.list_scroll_offset = new_offset;
+        *self.list_state.offset_mut() = new_offset;
+    }
+
+    fn rebuild_filtered(&mut self, strategy: Option<SelectStrategy>, preserve_view: bool) {
+        let prev_selected_entry = self.selected_entry_index();
 
         let mut filtered = Vec::with_capacity(self.entries.len());
         for (idx, entry) in self.entries.iter().enumerate() {
@@ -407,12 +472,26 @@ impl App {
             return;
         }
 
+        if preserve_view {
+            if let Some(prev_entry_idx) = prev_selected_entry {
+                if let Some(new_pos) = self
+                    .filtered_indices
+                    .iter()
+                    .position(|&idx| idx == prev_entry_idx)
+                {
+                    self.list_state.select(Some(new_pos));
+                    return;
+                }
+            }
+        }
+
         match strategy.unwrap_or(SelectStrategy::PreserveOrFirst) {
             SelectStrategy::Last => {
                 self.list_state
                     .select(Some(self.filtered_indices.len().saturating_sub(1)));
                 self.reset_detail_position();
                 self.horiz_offset = 0;
+                self.update_list_offset();
             }
             SelectStrategy::PreserveOrFirst => {
                 if let Some(prev_entry_idx) = prev_selected_entry {
@@ -424,12 +503,14 @@ impl App {
                         self.list_state.select(Some(new_pos));
                         self.reset_detail_position();
                         self.horiz_offset = 0;
+                        self.update_list_offset();
                         return;
                     }
                 }
                 self.list_state.select(Some(0));
                 self.reset_detail_position();
                 self.horiz_offset = 0;
+                self.update_list_offset();
             }
         }
     }
@@ -585,6 +666,48 @@ fn collect_fields(value: &Value) -> Vec<FieldEntry> {
     let mut out = Vec::new();
     walk(value, String::new(), &mut out);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entry_with_message(msg: &str) -> LogEntry {
+        LogEntry {
+            timestamp: "-".into(),
+            level: "INFO".into(),
+            message: msg.to_string(),
+            raw: json!({ "message": msg }),
+        }
+    }
+
+    #[test]
+    fn autoscroll_off_preserves_viewport_on_push() {
+        let mut app = App::new(100);
+        app.autoscroll = false;
+        app.last_list_height = 3;
+        app.entries = vec![
+            entry_with_message("one"),
+            entry_with_message("two"),
+            entry_with_message("three"),
+        ];
+        app.filtered_indices = vec![0, 1, 2];
+        app.list_state.select(Some(1));
+        app.list_scroll_offset = 1;
+        *app.list_state.offset_mut() = 1;
+
+        app.push(entry_with_message("four"));
+
+        assert_eq!(app.list_scroll_offset, 1, "offset should stay fixed");
+        assert_eq!(app.list_state.offset(), 1, "list state offset should remain");
+        assert_eq!(
+            app.list_state.selected(),
+            Some(1),
+            "selection should be unchanged"
+        );
+        assert_eq!(app.filtered_indices.len(), 4, "new entry still recorded");
+    }
 }
 
 fn move_field_selection(app: &mut App, delta: isize) {
@@ -993,6 +1116,9 @@ pub fn run_app<B: Backend>(
                                 {
                                     app.column_select_state.select(Some(0));
                                 }
+                            }
+                            KeyCode::Char('a') => {
+                                app.toggle_autoscroll();
                             }
                             KeyCode::Char('/') => {
                                 app.input_mode = InputMode::FilterInput;
