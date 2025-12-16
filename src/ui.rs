@@ -22,7 +22,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let show_status = matches!(app.input_mode, InputMode::FilterInput)
         || app.filter_error.is_some()
         || !app.filter_query.is_empty()
-        || !app.autoscroll;
+        || !app.autoscroll
+        || app.input_paused;
 
     let status_lines = if show_status {
         Some(status_lines(app))
@@ -529,6 +530,16 @@ fn status_lines(app: &App) -> Vec<Line<'static>> {
         lines.push(Line::from("Filter: (none)"));
     }
 
+    let input_line = if app.input_paused {
+        Line::styled(
+            "Input: paused (s to resume)",
+            Style::default().fg(Color::Red),
+        )
+    } else {
+        Line::from("Input: live (s to pause)")
+    };
+    lines.push(input_line);
+
     let autoscroll_status = if app.autoscroll { "on" } else { "off" };
     lines.push(Line::from(format!(
         "Autoscroll: {autoscroll_status} (a to toggle)"
@@ -741,6 +752,11 @@ fn all_shortcuts() -> Vec<Shortcut> {
             context: "Global",
             keys: "Ctrl+Z",
             description: "Zoom focused pane (list/detail/field viewer)",
+        },
+        Shortcut {
+            context: "Global",
+            keys: "s",
+            description: "Toggle input stream (pause/resume)",
         },
         Shortcut {
             context: "Global",

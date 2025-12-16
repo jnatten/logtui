@@ -73,7 +73,7 @@ pub fn run_app<B: Backend>(
 ) -> Result<()> {
     loop {
         for entry in rx.try_iter() {
-            app.push(entry);
+            app.ingest(entry);
         }
 
         if app.force_redraw {
@@ -318,6 +318,13 @@ pub fn run_app<B: Backend>(
                         }
                         continue;
                     }
+                    if key.code == KeyCode::Char('s')
+                        && matches!(app.input_mode, InputMode::Normal)
+                    {
+                        app.toggle_input_pause();
+                        continue;
+                    }
+
                     if key.code == KeyCode::Char('?') {
                         app.show_help = !app.show_help;
                         continue;

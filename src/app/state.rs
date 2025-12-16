@@ -35,6 +35,7 @@ pub struct App {
     pub columns: Vec<ColumnDef>,
     pub column_select_state: ListState,
     pub list_state: ListState,
+    pub input_paused: bool,
     pub list_scroll_offset: usize,
     pub max_entries: usize,
     pub last_list_height: usize,
@@ -82,6 +83,7 @@ impl App {
             columns: default_columns(),
             column_select_state,
             list_state,
+            input_paused: false,
             list_scroll_offset: 0,
             max_entries,
             last_list_height: 0,
@@ -116,6 +118,18 @@ impl App {
             field_detail_wrap: true,
             field_zoom: None,
         }
+    }
+
+    pub fn ingest(&mut self, entry: LogEntry) {
+        if self.input_paused {
+            return;
+        }
+        self.push(entry);
+    }
+
+    pub fn toggle_input_pause(&mut self) {
+        self.input_paused = !self.input_paused;
+        self.force_redraw = true;
     }
 
     pub fn push(&mut self, entry: LogEntry) {
@@ -743,5 +757,29 @@ mod tests {
         let _ = fv.rebuild_filter(); // may return false when selection stays valid
         assert_eq!(fv.filtered_indices.len(), 2); // nested and nested.c
         assert_eq!(fv.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn paused_input_discards_new_entries() {
+        let mut app = App::new(5);
+        app.input_paused = true;
+
+        app.ingest(entry_with_message("ignored"));
+
+        assert!(app.entries.is_empty());
+        assert!(app.filtered_indices.is_empty());
+    }
+
+    #[test]
+    fn ingest_resumes_after_toggle() {
+        let mut app = App::new(5);
+        app.input_paused = true;
+
+        app.ingest(entry_with_message("ignored"));
+        app.toggle_input_pause();
+        app.ingest(entry_with_message("kept"));
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.current_entry().unwrap().message, "kept");
     }
 }
