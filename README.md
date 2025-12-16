@@ -5,9 +5,12 @@ A fast, keyboard-driven TUI for exploring structured (JSON) logs from stdin or f
 ## ✨ Features
 
 - **Streaming input**: Read from stdin (pipes) or `--file` without buffering the world.
+- **Pause/resume intake**: Hit `s` to stop ingesting new lines; resume with `s` (discarded while paused).
 - **Interactive list + details**: Summaries on the left, full JSON on the right; zoom either pane with `z`.
+- **Field viewer**: `Ctrl+T` opens an explorer of every nested field; send a field value into the main `/` filter with `/`.
 - **Regex filtering**: Hit `/`, type a regex, Enter to apply; status bar shows active filter/errors.
 - **Column control**: Toggle and reorder columns (including dynamically discovered fields) via `c`; horizontal scroll with `h/l`, jump with `0/$`.
+- **Autoscroll toggle**: `a` to stick to the tail or browse without losing your place.
 - **Nested field fallback**: Automatically picks `timestamp/level/message` from top-level or `data.*`.
 - **Graceful for plain text**: Non-JSON lines render as `TEXT` with the raw content.
 - **Colorized levels & JSON**: Levels are colored per severity; details JSON is syntax-highlighted.
@@ -30,6 +33,7 @@ kubectl logs mypod | logtui
 - Zoom: `z` (zoom focused pane)
 - Redraw: `Ctrl+L` (clears stray artifacts)
 - Open in `$EDITOR`: `e`
+- Pause/resume intake: `s` (drops incoming lines while paused)
 
 ### List pane
 
@@ -67,12 +71,14 @@ kubectl logs mypod | logtui
 - Toggle wrap: `w`
 - Open selected in `$EDITOR`: `Ctrl+E`
 - Close: `Esc`, `Ctrl+T`
+- Note: `s` pauses intake globally (no new fields will arrive while paused).
 
 ## 🧠 Behavior notes
 
 - **Dynamic columns**: New fields discovered in logs (top-level and `data.*`) appear in the selector; defaults are `timestamp`, `level`, `message` (with `message` at the end).
 - **Filtering**: Applies to timestamp, level, message, and full JSON string. Invalid regex leaves the previous filter active and shows an error.
 - **Nested fields**: If `timestamp/level/message` are under `data.*`, they’re used automatically.
+- **Paused intake**: While paused (`s`), incoming lines are drained and dropped so the view stays stable; resume with `s`.
 
 ## 🛠️ Build & run
 
