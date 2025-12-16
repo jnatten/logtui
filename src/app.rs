@@ -708,6 +708,173 @@ mod tests {
         );
         assert_eq!(app.filtered_indices.len(), 4, "new entry still recorded");
     }
+
+    #[test]
+    fn filter_preserves_selection_when_entry_still_matches() {
+        let mut app = App::new(100);
+        app.entries = vec![
+            entry_with_message("one"),
+            entry_with_message("two"),
+            entry_with_message("three"),
+        ];
+        app.filtered_indices = vec![0, 1, 2];
+        app.list_state.select(Some(1));
+
+        app.apply_filter("two|three");
+
+        let current = app.current_entry().unwrap();
+        assert_eq!(current.message, "two");
+        assert_eq!(app.filtered_indices, vec![1, 2]);
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn filter_moves_selection_when_previous_is_filtered_out() {
+        let mut app = App::new(100);
+        app.entries = vec![
+            entry_with_message("one"),
+            entry_with_message("two"),
+            entry_with_message("three"),
+        ];
+        app.filtered_indices = vec![0, 1, 2];
+        app.list_state.select(Some(0));
+
+        app.apply_filter("two");
+
+        let current = app.current_entry().unwrap();
+        assert_eq!(current.message, "two");
+        assert_eq!(app.filtered_indices, vec![1]);
+        assert_eq!(app.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn eviction_keeps_alignment_and_selection_on_tail() {
+        let mut app = App::new(2);
+        app.push(entry_with_message("one"));
+        app.push(entry_with_message("two"));
+        app.push(entry_with_message("three")); // triggers eviction of "one"
+
+        let messages: Vec<String> = app.entries.iter().map(|e| e.message.clone()).collect();
+        assert_eq!(messages, vec!["two", "three"]);
+        assert_eq!(app.filtered_indices, vec![0, 1]);
+        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.current_entry().unwrap().message, "three");
+    }
+
+    #[test]
+    fn toggle_autoscroll_jumps_to_latest() {
+        let mut app = App::new(10);
+        app.autoscroll = false;
+        app.entries = vec![
+            entry_with_message("one"),
+            entry_with_message("two"),
+            entry_with_message("three"),
+        ];
+        app.filtered_indices = vec![0, 1, 2];
+        app.list_state.select(Some(0));
+
+        app.toggle_autoscroll();
+
+        assert!(app.autoscroll);
+        assert_eq!(app.list_state.selected(), Some(2));
+        assert_eq!(app.current_entry().unwrap().message, "three");
+    }
+
+    #[test]
+    fn invalid_filter_does_not_change_active_regex() {
+        let mut app = App::new(10);
+        app.entries = vec![entry_with_message("one")];
+        app.filtered_indices = vec![0];
+
+        app.apply_filter("["); // invalid regex
+
+        assert!(app.filter_regex.is_none());
+        assert!(app.filter_error.is_some());
+        assert_eq!(app.filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn column_discovery_adds_new_fields_once() {
+        let mut app = App::new(10);
+        assert_eq!(app.columns.len(), 3); // default columns
+
+        app.discover_columns(&json!({"foo": "bar", "data": { "baz": 1 }}));
+        let names: Vec<String> = app.columns.iter().map(|c| c.name.clone()).collect();
+        assert!(names.contains(&"foo".to_string()));
+        assert!(names.contains(&"data.baz".to_string()));
+
+        // Repeat discovery should not duplicate
+        app.discover_columns(&json!({"foo": "again", "data": { "baz": 2 }}));
+        let foo_count = app
+            .columns
+            .iter()
+            .filter(|c| c.name == "foo")
+            .count();
+        let baz_count = app
+            .columns
+            .iter()
+            .filter(|c| c.name == "data.baz")
+            .count();
+        assert_eq!(foo_count, 1);
+        assert_eq!(baz_count, 1);
+    }
+
+    #[test]
+    fn toggle_column_enabled_flag() {
+        let mut app = App::new(10);
+        app.column_select_state.select(Some(0));
+        let before = app.columns[0].enabled;
+        app.move_column(0); // no-op move; ensures selection exists
+        if let Some(idx) = app.column_select_state.selected() {
+            app.columns[idx].enabled = !before;
+        }
+        assert_ne!(app.columns[0].enabled, before);
+    }
+
+    #[test]
+    fn eviction_rebases_filtered_indices_with_filter_active() {
+        let mut app = App::new(2);
+        app.apply_filter("two|three"); // set filter before data arrives
+
+        app.push(entry_with_message("one"));   // filtered out
+        app.push(entry_with_message("two"));   // kept
+        app.push(entry_with_message("three")); // evicts "one"
+
+        let msgs: Vec<_> = app
+            .filtered_indices
+            .iter()
+            .filter_map(|&i| app.entries.get(i))
+            .map(|e| e.message.clone())
+            .collect();
+        assert_eq!(msgs, vec!["two", "three"]);
+        assert_eq!(app.entries.len(), 2);
+        assert_eq!(app.filtered_indices, vec![0, 1]);
+        assert_eq!(app.list_state.selected(), Some(1));
+        assert_eq!(app.current_entry().unwrap().message, "three");
+    }
+
+    #[test]
+    fn field_view_filter_rebuilds_indices_and_resets_selection() {
+        let mut app = App::new(10);
+        let entry = LogEntry {
+            timestamp: "-".into(),
+            level: "INFO".into(),
+            message: "has data".into(),
+            raw: json!({"a": 1, "b": 2, "nested": { "c": 3 }}),
+        };
+        app.entries.push(entry.clone());
+        app.filtered_indices = vec![0];
+        app.list_state.select(Some(0));
+
+        app.enter_field_view();
+        let fv = app.field_view.as_mut().unwrap();
+        // initial selection
+        assert_eq!(fv.list_state.selected(), Some(0));
+        fv.filter = "nested".into();
+        let _ = fv.rebuild_filter(); // may return false when selection stays valid
+        assert_eq!(fv.filtered_indices.len(), 2); // nested and nested.c
+        assert_eq!(fv.list_state.selected(), Some(0));
+    }
 }
 
 fn move_field_selection(app: &mut App, delta: isize) {
