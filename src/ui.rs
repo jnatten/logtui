@@ -116,7 +116,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .enumerate()
             .map(|(i, (text, style))| {
                 let idx = start + i;
-                let prefix = if Some(idx) == selected_abs { "▸ " } else { "  " };
+                let prefix = if Some(idx) == selected_abs {
+                    "▸ "
+                } else {
+                    "  "
+                };
                 let mut line = prefix.to_string();
                 line.push_str(text);
                 let mut item = ListItem::new(line).style(*style);

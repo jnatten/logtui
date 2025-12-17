@@ -1,12 +1,12 @@
-use regex::Regex;
 use ratatui::widgets::ListState;
+use regex::Regex;
 use serde_json::Value;
 
 use crate::model::LogEntry;
 
 use super::{
-    columns::{default_columns, is_reserved_column, ColumnDef},
-    field_view::{collect_fields, FieldViewState, FieldZoom},
+    columns::{ColumnDef, default_columns, is_reserved_column},
+    field_view::{FieldViewState, FieldZoom, collect_fields},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -583,7 +583,11 @@ mod tests {
         app.push(entry_with_message("four"));
 
         assert_eq!(app.list_scroll_offset, 1, "offset should stay fixed");
-        assert_eq!(app.list_state.offset(), 1, "list state offset should remain");
+        assert_eq!(
+            app.list_state.offset(),
+            1,
+            "list state offset should remain"
+        );
         assert_eq!(
             app.list_state.selected(),
             Some(1),
@@ -688,16 +692,8 @@ mod tests {
 
         // Repeat discovery should not duplicate
         app.discover_columns(&json!({"foo": "again", "data": { "baz": 2 }}));
-        let foo_count = app
-            .columns
-            .iter()
-            .filter(|c| c.name == "foo")
-            .count();
-        let baz_count = app
-            .columns
-            .iter()
-            .filter(|c| c.name == "data.baz")
-            .count();
+        let foo_count = app.columns.iter().filter(|c| c.name == "foo").count();
+        let baz_count = app.columns.iter().filter(|c| c.name == "data.baz").count();
         assert_eq!(foo_count, 1);
         assert_eq!(baz_count, 1);
     }
@@ -719,8 +715,8 @@ mod tests {
         let mut app = App::new(2);
         app.apply_filter("two|three"); // set filter before data arrives
 
-        app.push(entry_with_message("one"));   // filtered out
-        app.push(entry_with_message("two"));   // kept
+        app.push(entry_with_message("one")); // filtered out
+        app.push(entry_with_message("two")); // kept
         app.push(entry_with_message("three")); // evicts "one"
 
         let msgs: Vec<_> = app

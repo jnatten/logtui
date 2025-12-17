@@ -2,7 +2,7 @@ use std::{sync::mpsc, time::Duration};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::{backend::Backend, Terminal};
+use ratatui::{Terminal, backend::Backend};
 use regex::escape;
 
 use crate::{
@@ -318,8 +318,7 @@ pub fn run_app<B: Backend>(
                         }
                         continue;
                     }
-                    if key.code == KeyCode::Char('s')
-                        && matches!(app.input_mode, InputMode::Normal)
+                    if key.code == KeyCode::Char('s') && matches!(app.input_mode, InputMode::Normal)
                     {
                         app.toggle_input_pause();
                         continue;
