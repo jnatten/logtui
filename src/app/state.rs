@@ -466,17 +466,15 @@ impl App {
             return;
         }
 
-        if preserve_view {
-            if let Some(prev_entry_idx) = prev_selected_entry {
-                if let Some(new_pos) = self
-                    .filtered_indices
-                    .iter()
-                    .position(|&idx| idx == prev_entry_idx)
-                {
-                    self.list_state.select(Some(new_pos));
-                    return;
-                }
-            }
+        if preserve_view
+            && let Some(prev_entry_idx) = prev_selected_entry
+            && let Some(new_pos) = self
+                .filtered_indices
+                .iter()
+                .position(|&idx| idx == prev_entry_idx)
+        {
+            self.list_state.select(Some(new_pos));
+            return;
         }
 
         match strategy.unwrap_or(SelectStrategy::PreserveOrFirst) {
@@ -488,18 +486,17 @@ impl App {
                 self.update_list_offset();
             }
             SelectStrategy::PreserveOrFirst => {
-                if let Some(prev_entry_idx) = prev_selected_entry {
-                    if let Some(new_pos) = self
+                if let Some(prev_entry_idx) = prev_selected_entry
+                    && let Some(new_pos) = self
                         .filtered_indices
                         .iter()
                         .position(|&idx| idx == prev_entry_idx)
-                    {
-                        self.list_state.select(Some(new_pos));
-                        self.reset_detail_position();
-                        self.horiz_offset = 0;
-                        self.update_list_offset();
-                        return;
-                    }
+                {
+                    self.list_state.select(Some(new_pos));
+                    self.reset_detail_position();
+                    self.horiz_offset = 0;
+                    self.update_list_offset();
+                    return;
                 }
                 self.list_state.select(Some(0));
                 self.reset_detail_position();

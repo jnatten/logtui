@@ -345,10 +345,10 @@ pub fn run_app<B: Backend>(
                                 app.input_mode = InputMode::Normal;
                             }
                             KeyCode::Char(' ') | KeyCode::Enter => {
-                                if let Some(idx) = app.column_select_state.selected() {
-                                    if let Some(col) = app.columns.get_mut(idx) {
-                                        col.enabled = !col.enabled;
-                                    }
+                                if let Some(idx) = app.column_select_state.selected()
+                                    && let Some(col) = app.columns.get_mut(idx)
+                                {
+                                    col.enabled = !col.enabled;
                                 }
                             }
                             KeyCode::Char('J') => {

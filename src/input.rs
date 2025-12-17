@@ -129,15 +129,14 @@ fn extract_timestamp(value: &Value) -> String {
         return ts.to_string();
     }
 
-    if let Some(instant) = value.get("instant") {
-        if let (Some(seconds), Some(nanos)) = (
+    if let Some(instant) = value.get("instant")
+        && let (Some(seconds), Some(nanos)) = (
             instant.get("epochSecond").and_then(|v| v.as_i64()),
             instant.get("nanoOfSecond").and_then(|v| v.as_u64()),
-        ) {
-            if let Some(dt) = DateTime::from_timestamp(seconds, nanos as u32) {
-                return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
-            }
-        }
+        )
+        && let Some(dt) = DateTime::from_timestamp(seconds, nanos as u32)
+    {
+        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
     }
 
     "-".to_string()

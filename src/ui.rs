@@ -402,14 +402,14 @@ fn slice_row(s: &str, offset: usize, width: usize) -> String {
 }
 
 fn extract_field_string(value: &serde_json::Value, path: &[String]) -> Option<String> {
-    if let serde_json::Value::String(s) = value {
-        if path.len() == 1 {
-            match path[0].as_str() {
-                "timestamp" => return Some("-".into()),
-                "level" => return Some("TEXT".into()),
-                "message" => return Some(s.clone()),
-                _ => {}
-            }
+    if let serde_json::Value::String(s) = value
+        && path.len() == 1
+    {
+        match path[0].as_str() {
+            "timestamp" => return Some("-".into()),
+            "level" => return Some("TEXT".into()),
+            "message" => return Some(s.clone()),
+            _ => {}
         }
     }
 
@@ -463,7 +463,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         ]));
     }
 
-    let width = (area.width.saturating_sub(10)).min(90).max(50);
+    let width = (area.width.saturating_sub(10)).clamp(50, 90);
     let needed_height = (lines.len() as u16).saturating_add(2);
     let max_allowed = area.height.saturating_sub(2);
     let height = needed_height.min(max_allowed).max(8);
@@ -480,7 +480,7 @@ fn render_help(f: &mut Frame, area: Rect) {
 }
 
 fn render_column_selector(f: &mut Frame, area: Rect, app: &mut App) {
-    let width = (area.width.saturating_sub(10)).min(90).max(40);
+    let width = (area.width.saturating_sub(10)).clamp(40, 90);
     let height = (app.columns.len() as u16 + 4)
         .min(area.height.saturating_sub(2))
         .max(6);
@@ -706,7 +706,7 @@ fn wrapped_height(text: &Text<'_>, width: usize) -> usize {
         let wrapped = if line_width == 0 {
             1
         } else {
-            (line_width + effective_width - 1) / effective_width
+            line_width.div_ceil(effective_width)
         };
         total += wrapped.max(1);
     }
